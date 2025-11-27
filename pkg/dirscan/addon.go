@@ -42,6 +42,13 @@ func CreateDefaultAddon() (*DirscanAddon, error) {
 	return NewDirscanAddon(config)
 }
 
+// SetProxy 设置代理
+func (da *DirscanAddon) SetProxy(proxyURL string) {
+	if da.engine != nil {
+		da.engine.SetProxy(proxyURL)
+	}
+}
+
 // ===========================================
 // 核心接口方法
 // ===========================================

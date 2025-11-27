@@ -39,6 +39,13 @@ func NewDirscanModule(col *Collector) (*DirscanModule, error) {
 	return module, nil
 }
 
+// SetProxy 设置代理
+func (dm *DirscanModule) SetProxy(proxyURL string) {
+	if dm.addon != nil {
+		dm.addon.SetProxy(proxyURL)
+	}
+}
+
 // Start 启动模块
 func (dm *DirscanModule) Start() error {
 	if dm.status == ModuleStatusStarted {

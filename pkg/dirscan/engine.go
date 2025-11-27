@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	report "veo/pkg/reporter"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
-	report "veo/pkg/reporter"
 	requests "veo/pkg/utils/processor"
 )
 
@@ -33,6 +33,13 @@ func NewEngine(config *EngineConfig) *Engine {
 
 	logger.Debug("目录扫描引擎初始化完成")
 	return engine
+}
+
+// SetProxy 设置代理
+func (e *Engine) SetProxy(proxyURL string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.config.ProxyURL = proxyURL
 }
 
 // SetFilterConfig 设置自定义过滤器配置（SDK可用）
@@ -203,6 +210,15 @@ func (e *Engine) getOrCreateRequestProcessor() *requests.RequestProcessor {
 	if e.requestProcessor == nil {
 		logger.Debug("创建新的请求处理器")
 		e.requestProcessor = requests.NewRequestProcessor(nil)
+
+		// 应用代理配置
+		if e.config.ProxyURL != "" {
+			reqConfig := e.requestProcessor.GetConfig()
+			reqConfig.ProxyURL = e.config.ProxyURL
+			e.requestProcessor.UpdateConfig(reqConfig)
+			logger.Debugf("Dirscan使用代理: %s", e.config.ProxyURL)
+		}
+
 		// Custom headers should be set via SetCustomHeaders method by the caller
 	}
 

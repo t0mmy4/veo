@@ -3432,3 +3432,7 @@ ArcGIS:
   dsl:
   - "contains(body, 'arcgismanager','dojo/dojo/dojo.js')"
   - "contains(header, 'arcgis')"
+
+阿里云OSS:
+  dsl:
+  - "contains_all(body, 'RequestId','Message','HostId','EC')"

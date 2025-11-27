@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"veo/internal/core/config"
 	"veo/pkg/utils/logger"
-	"veo/pkg/utils/useragent"
 	"veo/pkg/utils/redirect"
+	"veo/pkg/utils/useragent"
 )
 
 // ===========================================
@@ -42,6 +43,7 @@ type Config struct {
 	UserAgent      string        // User-Agent
 	SkipTLSVerify  bool          // 跳过TLS证书验证
 	TLSTimeout     time.Duration // TLS握手超时
+	ProxyURL       string        // 上游代理URL
 }
 
 // DefaultConfig 获取默认HTTP客户端配置（安全扫描优化版）
@@ -97,16 +99,28 @@ func New(config *Config) *Client {
 		MaxVersion:         tls.VersionTLS13,
 	}
 
+	transport := &http.Transport{
+		MaxIdleConns:        20,
+		IdleConnTimeout:     30 * time.Second,
+		DisableCompression:  false,
+		MaxIdleConnsPerHost: 5,
+		TLSClientConfig:     tlsConfig,
+		TLSHandshakeTimeout: config.TLSTimeout,
+	}
+
+	// 配置代理
+	if config.ProxyURL != "" {
+		if proxyURL, err := url.Parse(config.ProxyURL); err == nil {
+			transport.Proxy = http.ProxyURL(proxyURL)
+			logger.Debugf("HTTPClient使用代理: %s", config.ProxyURL)
+		} else {
+			logger.Warnf("无效的代理URL: %s, 错误: %v", config.ProxyURL, err)
+		}
+	}
+
 	client := &http.Client{
-		Timeout: config.Timeout,
-		Transport: &http.Transport{
-			MaxIdleConns:        20,
-			IdleConnTimeout:     30 * time.Second,
-			DisableCompression:  false,
-			MaxIdleConnsPerHost: 5,
-			TLSClientConfig:     tlsConfig,
-			TLSHandshakeTimeout: config.TLSTimeout,
-		},
+		Timeout:   config.Timeout,
+		Transport: transport,
 	}
 
 	// 配置重定向策略

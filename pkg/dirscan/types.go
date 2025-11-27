@@ -31,6 +31,7 @@ type EngineConfig struct {
 	EnableCollection bool          `yaml:"enable_collection"` // 是否启用URL收集
 	EnableFiltering  bool          `yaml:"enable_filtering"`  // 是否启用响应过滤
 	EnableReporting  bool          `yaml:"enable_reporting"`  // 是否启用报告生成
+	ProxyURL         string        `yaml:"proxy_url"`         // 上游代理地址
 }
 
 // Statistics 统计信息

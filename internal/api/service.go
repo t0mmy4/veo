@@ -16,14 +16,14 @@ import (
 
 	"github.com/andybalholm/brotli"
 	"veo/internal/core/config"
-	"veo/pkg/utils/interfaces"
-	portconfig "veo/pkg/portscan"
 	internaldirscan "veo/pkg/dirscan"
 	fingerprintinternal "veo/pkg/fingerprint"
+	portconfig "veo/pkg/portscan"
 	portscanpkg "veo/pkg/portscan"
 	masscanrunner "veo/pkg/portscan/masscan"
 	portservice "veo/pkg/portscan/service"
 	"veo/pkg/utils/httpclient"
+	"veo/pkg/utils/interfaces"
 	requests "veo/pkg/utils/processor"
 	sharedutils "veo/pkg/utils/shared"
 )
@@ -435,7 +435,7 @@ func selectFullResponse(page interfaces.HTTPResponse, fullMap map[string][]*inte
 
 func createFingerprintEngine(cfg *FingerprintModuleConfig) (*fingerprintinternal.Engine, error) {
 	engineCfg := &fingerprintinternal.EngineConfig{
-		RulesPath:       "configs/fingerprint/",
+		RulesPath:       "config/fingerprint/",
 		MaxConcurrency:  20,
 		EnableFiltering: true,
 		MaxBodySize:     1 * 1024 * 1024,

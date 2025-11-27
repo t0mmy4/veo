@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -13,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/net/proxy"
 
 	"veo/pkg/utils/httpclient"
 	"veo/pkg/utils/interfaces"
@@ -47,6 +50,7 @@ type RequestConfig struct {
 	KeepAlive       time.Duration // 保持连接时间
 	RandomUserAgent bool          // 是否随机使用UserAgent
 	Delay           time.Duration // 请求延迟时间
+	ProxyURL        string        // 上游代理URL
 }
 
 // shouldFollowRedirect 判断是否应该跟随重定向（同主机/域名检查）
@@ -1190,7 +1194,7 @@ func (rp *RequestProcessor) convertToHTTPResponse(resp *fasthttp.Response) *http
 
 // createFastHTTPClient 创建fasthttp客户端
 func createFastHTTPClient(config *RequestConfig) *fasthttp.Client {
-	return &fasthttp.Client{
+	client := &fasthttp.Client{
 		TLSConfig: &tls.Config{
 			Renegotiation:      tls.RenegotiateOnceAsClient,
 			InsecureSkipVerify: true,
@@ -1205,6 +1209,31 @@ func createFastHTTPClient(config *RequestConfig) *fasthttp.Client {
 		NoDefaultUserAgentHeader:      true,
 		ReadBufferSize:                16384, // 16k
 	}
+
+	// 配置代理
+	if config.ProxyURL != "" {
+		u, err := url.Parse(config.ProxyURL)
+		if err == nil {
+			var dialer proxy.Dialer
+			// 支持SOCKS5
+			if strings.HasPrefix(config.ProxyURL, "socks5") {
+				dialer, err = proxy.FromURL(u, proxy.Direct)
+			}
+
+			if dialer != nil {
+				client.Dial = func(addr string) (net.Conn, error) {
+					return dialer.Dial("tcp", addr)
+				}
+				logger.Debugf("Fasthttp使用SOCKS5代理: %s", config.ProxyURL)
+			} else if strings.HasPrefix(config.ProxyURL, "http") {
+				logger.Warnf("Fasthttp暂不支持HTTP代理，仅支持SOCKS5: %s", config.ProxyURL)
+			}
+		} else {
+			logger.Warnf("无效的代理URL: %s, 错误: %v", config.ProxyURL, err)
+		}
+	}
+
+	return client
 }
 
 // ===========================================

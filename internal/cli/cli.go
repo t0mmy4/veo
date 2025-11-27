@@ -58,6 +58,7 @@ type CLIArgs struct {
 	Rate     int    // 扫描速率 (--rate，包/秒)
 	Wordlist string // 自定义字典路径 (-w)
 	Listen   bool   // 被动代理模式 (--listen)
+	Proxy    string // 上游代理地址 (--proxy)
 	Debug    bool   // 调试模式 (--debug)
 
 	// 新增：线程并发控制和全局配置参数
@@ -208,6 +209,7 @@ func ParseCLIArgs() *CLIArgs {
 		rateArg    = flag.Int("rate", 0, "端口扫描速率(包/秒)，仅在启用端口扫描时使用 (例如: --rate 10000)")
 		wordlist   = flag.String("w", "", "自定义字典文件路径 (例如: -w /path/to/custom.txt)")
 		listen     = flag.Bool("listen", false, "启用被动代理模式 (默认: 主动扫描模式)")
+		proxy      = flag.String("proxy", "", "设置上游代理 (例如: http://127.0.0.1:8080 或 socks5://127.0.0.1:1080)")
 		debug      = flag.Bool("debug", false, "启用调试模式，显示详细日志 (默认: 仅显示INFO及以上级别)")
 
 		// 新增：线程并发控制和全局配置参数
@@ -265,6 +267,7 @@ func ParseCLIArgs() *CLIArgs {
 		Rate:       *rateArg,
 		Wordlist:   *wordlist,
 		Listen:     *listen,
+		Proxy:      *proxy,
 		Debug:      *debug,
 
 		// 新增参数处理：支持短参数和长参数
@@ -663,6 +666,11 @@ func initializeApp(args *CLIArgs) (*CLIApp, error) {
 		if err != nil {
 			return nil, fmt.Errorf("创建目录扫描模块失败: %v", err)
 		}
+
+		// 应用全局代理设置到目录扫描模块
+		if proxyCfg := config.GetProxyConfig(); proxyCfg.UpstreamProxy != "" {
+			dirscanModule.SetProxy(proxyCfg.UpstreamProxy)
+		}
 	} else {
 		logger.Debug("未启用目录扫描模块，跳过collector和consoleManager创建")
 	}
@@ -828,6 +836,13 @@ func applyArgsToConfig(args *CLIArgs) {
 		logger.Infof("Use Dicts: %s", strings.Join(wordlists, ","))
 	} else {
 		dirscan.SetWordlistPaths(nil)
+	}
+
+	// 设置上游代理
+	if args.Proxy != "" {
+		proxyConfig := config.GetProxyConfig()
+		proxyConfig.UpstreamProxy = args.Proxy
+		logger.Infof("上游代理已设置: %s", args.Proxy)
 	}
 
 	// 应用输出文件路径
@@ -1073,11 +1088,18 @@ func startApplication(args *CLIArgs) error {
 	if app.fingerprintAddon != nil {
 		// 使用HTTP客户端工厂创建客户端（代码质量优化）
 		userAgent := "Moziilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
-		httpClient := httpclient.CreateClientWithUserAgent(userAgent)
+
+		// 获取并更新客户端配置
+		clientConfig := httpclient.DefaultConfigWithUserAgent(userAgent)
+		if proxyCfg := config.GetProxyConfig(); proxyCfg.UpstreamProxy != "" {
+			clientConfig.ProxyURL = proxyCfg.UpstreamProxy
+		}
+
+		httpClient := httpclient.New(clientConfig)
 
 		// 注入到指纹识别模块
 		app.fingerprintAddon.SetHTTPClient(httpClient)
-		logger.Debug("HTTP客户端已注入到指纹识别模块（使用工厂模式）")
+		logger.Debug("HTTP客户端已注入到指纹识别模块")
 	}
 
 	logger.Debug("模块启动和依赖注入完成")
@@ -1378,7 +1400,6 @@ func buildHostAllowList(targets []string) []string {
 			add(host + ":" + port)
 		}
 		if wildcard {
-			// 通配符目标仅保留用户指定的形式
 			continue
 		}
 	}

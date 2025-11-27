@@ -305,22 +305,39 @@ func (p *DSLParser) evaluateHeader(dsl string, ctx *DSLContext) (bool, bool) {
 
 // evaluateContainsAll 处理 contains_all() 函数
 func (p *DSLParser) evaluateContainsAll(dsl string, ctx *DSLContext) (bool, bool) {
-	// contains_all('text1', 'text2', 'text3') - 检查body中是否包含所有指定文本
+	// contains_all('body', 'text1', 'text2') - 检查body中是否包含所有指定文本
 	if strings.HasPrefix(dsl, "contains_all(") && strings.HasSuffix(dsl, ")") {
 		content := dsl[13 : len(dsl)-1] // 移除 "contains_all(" 和 ")"
 		parts := p.parseParameters(content)
 
-		if len(parts) < 1 {
+		if len(parts) < 2 {
 			return false, true
 		}
 
-		// 默认在body中搜索
-		target := strings.ToLower(ctx.Body)
+		source := strings.TrimSpace(parts[0])
+		var target string
+
+		switch source {
+		case "body":
+			target = ctx.Body
+		case "header":
+			target = p.headersToString(ctx.Headers)
+		case "title":
+			target = ctx.Response.Title
+		case "server":
+			target = ctx.Response.Server
+		case "url":
+			target = ctx.URL
+		default:
+			return false, true
+		}
+
+		targetLower := strings.ToLower(target)
 
 		// 检查所有文本是否都在target中
-		for _, part := range parts {
-			searchText := p.cleanQuotes(strings.TrimSpace(part))
-			if !strings.Contains(target, strings.ToLower(searchText)) {
+		for i := 1; i < len(parts); i++ {
+			searchText := p.cleanQuotes(strings.TrimSpace(parts[i]))
+			if !strings.Contains(targetLower, strings.ToLower(searchText)) {
 				return false, true // 有一个不包含就返回false
 			}
 		}

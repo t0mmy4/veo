@@ -651,7 +651,7 @@ func getDefaultConfig() *EngineConfig {
 	maxConcurrency := 20 // 默认最小并发数
 
 	return &EngineConfig{
-		RulesPath:       "configs/fingerprint/", // [修改] 改为目录路径，自动加载所有YAML文件
+		RulesPath:       "config/fingerprint/", // [修改] 改为目录路径，自动加载所有YAML文件
 		MaxConcurrency:  maxConcurrency,
 		EnableFiltering: true,
 		MaxBodySize:     1024 * 1024, // 1MB

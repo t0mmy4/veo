@@ -10,10 +10,10 @@ import (
 
 var (
 	aliasFiles = map[string]string{
-		"web":     "configs/port/web.txt",
-		"service": "configs/port/service.txt",
-		"top5000": "configs/port/top5000.txt",
-		"top1000": "configs/port/top1000.txt",
+		"web":     "config/port/web.txt",
+		"service": "config/port/service.txt",
+		"top5000": "config/port/top5000.txt",
+		"top1000": "config/port/top1000.txt",
 	}
 
 	// ErrEmptyExpression 表示端口表达式为空
@@ -58,7 +58,7 @@ func ResolveExpression(raw string) (string, string, error) {
 	if !strings.HasSuffix(strings.ToLower(candidate), ".txt") {
 		candidate = candidate + ".txt"
 	}
-	candidate = filepath.Join("configs/port", candidate)
+	candidate = filepath.Join("config/port", candidate)
 	if expr, err := loadPortFile(candidate); err == nil {
 		return expr, candidate, nil
 	}

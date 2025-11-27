@@ -153,7 +153,7 @@ func InitConfig() error {
 	// 尝试多个可能的配置文件路径
 	configPaths := []string{
 		"config.yaml",
-		"./configs/config.yaml",
+		"./config/config.yaml",
 		"./config.yaml",
 	}
 

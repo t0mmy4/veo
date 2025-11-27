@@ -202,7 +202,7 @@
 ---
 ## 配置文件说明
 
-默认配置位于 `configs/config.yaml`，主要分为以下模块：
+默认配置位于 `config/config.yaml`，主要分为以下模块：
 
 ### 服务器与主机过滤
 ```yaml

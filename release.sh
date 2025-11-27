@@ -16,7 +16,7 @@ RELEASE_DIR="release"
 
 # 需要包含的资源文件
 RESOURCE_FILES=(
-    "configs"
+    "config"
     "dict" 
     "ca-cert.zip"
     "README.md"
@@ -193,8 +193,8 @@ generate_readme() {
 
 ## 配置文件
 
-- **configs/config.yaml**: 主配置文件
-- **configs/fingerprint/finger.yaml**: 指纹识别规则
+- **config/config.yaml**: 主配置文件
+- **config/fingerprint/finger.yaml**: 指纹识别规则
 - **dict/**: 目录扫描字典文件
 
 ## 目录结构
@@ -202,7 +202,7 @@ generate_readme() {
 \`\`\`
 .
 ├── ${binary_name}              # 主程序
-├── configs/                    # 配置文件目录
+├── config/                    # 配置文件目录
 │   ├── config.yaml            # 主配置
 │   └── fingerprint/           # 指纹识别规则
 ├── dict/                      # 字典文件目录
