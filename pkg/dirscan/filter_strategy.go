@@ -213,11 +213,13 @@ func (bf *BaseHashFilter) calculateTolerantContentLength(originalLength int64) i
 
 	var step int64
 	if originalLength < 1000 {
-		// 小文件：使用配置的tolerance（默认50）或50
+		// 小文件：使用配置的tolerance（默认50）
+		// [优化] 移除对tolerance的强制限制，允许用户配置更大的容错值
+		// 对于WAF页面，通常包含时间戳或RequestID，差异可能在50-100字节之间
 		step = bf.tolerance
-		if step > 50 {
-			step = 50
-		} // 限制最大值
+		if step < 20 { // 最小步长限制，防止过小
+			step = 20
+		}
 	} else if originalLength < 5000 {
 		// 1k-5k：容错500（足以覆盖大部分URL反射差异）
 		step = 500

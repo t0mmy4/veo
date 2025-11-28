@@ -7,9 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"veo/pkg/utils/formatter"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
-	"veo/pkg/utils/formatter"
 	sharedutils "veo/pkg/utils/shared"
 )
 
@@ -51,7 +51,8 @@ func DefaultFilterConfig() *FilterConfig {
 		},
 
 		// 相似页面过滤容错阈值默认配置
-		FilterTolerance: 50, // 默认50字节容错
+		// [优化] 增加默认容错阈值到 100 字节，以便更好地聚合包含随机ID/时间戳的WAF页面/403页面
+		FilterTolerance: 100, // 默认100字节容错
 	}
 }
 
@@ -92,13 +93,13 @@ func getGlobalFilterConfig() *FilterConfig {
 
 // ResponseFilter 响应过滤器（重构版，使用策略模式）
 type ResponseFilter struct {
-	config            *FilterConfig                      // 过滤器配置
+	config            *FilterConfig             // 过滤器配置
 	statusCodeFilter  StatusCodeFilterStrategy  // 状态码过滤策略
 	hashFilter        HashFilterStrategy        // 哈希过滤策略
 	secondaryFilter   SecondaryFilterStrategy   // 二次筛选策略
 	contentTypeFilter ContentTypeFilterStrategy // Content-Type过滤策略
 	filterChain       *FilterChain              // 过滤链
-	mu                sync.RWMutex                       // 读写锁
+	mu                sync.RWMutex              // 读写锁
 
 	// [新增] 可选的指纹识别引擎（用于目录扫描结果的二次识别）
 	fingerprintEngine      interface{}

@@ -496,3 +496,8 @@
 /metrics/nacos
 /webjars/**/actuator/nacosconfig
 /actuator/nacos/config
+/actuator/./env
+/actuator/./
+/actuator/./heapdump
+/./actuator/
+/./actuator

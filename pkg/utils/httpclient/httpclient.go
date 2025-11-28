@@ -100,12 +100,12 @@ func New(config *Config) *Client {
 	}
 
 	transport := &http.Transport{
-		MaxIdleConns:        20,
-		IdleConnTimeout:     30 * time.Second,
-		DisableCompression:  false,
-		MaxIdleConnsPerHost: 5,
-		TLSClientConfig:     tlsConfig,
-		TLSHandshakeTimeout: config.TLSTimeout,
+			MaxIdleConns:        20,
+			IdleConnTimeout:     30 * time.Second,
+			DisableCompression:  false,
+			MaxIdleConnsPerHost: 5,
+			TLSClientConfig:     tlsConfig,
+			TLSHandshakeTimeout: config.TLSTimeout,
 	}
 
 	// 配置代理
@@ -124,18 +124,9 @@ func New(config *Config) *Client {
 	}
 
 	// 配置重定向策略
-	if config.FollowRedirect {
-		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-			if len(via) >= config.MaxRedirects {
-				return fmt.Errorf("超过最大重定向次数: %d", config.MaxRedirects)
-			}
-			logger.Debugf("跟随重定向: %s -> %s", via[len(via)-1].URL.String(), req.URL.String())
-			return nil
-		}
-	} else {
+	// 统一禁用net/http的自动重定向，交由redirect.Execute统一管理
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
-		}
 	}
 
 	return &Client{
@@ -144,6 +135,16 @@ func New(config *Config) *Client {
 		maxRedirects:   config.MaxRedirects,
 		userAgent:      config.UserAgent,
 	}
+}
+
+// httpClientFetcher 适配器，用于将Client适配为redirect.HTTPFetcherFull接口
+type httpClientFetcher struct {
+	client        *Client
+	customHeaders map[string]string
+}
+
+func (f *httpClientFetcher) MakeRequestFull(rawURL string) (string, int, map[string][]string, error) {
+	return f.client.doRequestInternal(rawURL, f.customHeaders)
 }
 
 // MakeRequest 实现HTTPClientInterface接口，支持TLS和重定向
@@ -167,39 +168,26 @@ func (c *Client) executeRequest(rawURL string, customHeaders map[string]string) 
 }
 
 func (c *Client) executeRequestFull(rawURL string, customHeaders map[string]string) (body string, statusCode int, headers map[string][]string, err error) {
-	url := rawURL
-
-	// 限制客户端重定向次数为3次
-	maxClientRedirects := 3
-
-	for i := 0; i <= maxClientRedirects; i++ {
-		body, statusCode, headers, err = c.doRequestInternal(url, customHeaders)
-		if err != nil {
-			return body, statusCode, headers, err
+	// 构造重定向配置
+	redirectConfig := &redirect.Config{
+		MaxRedirects:   c.maxRedirects,
+		FollowRedirect: c.followRedirect,
+		SameHostOnly:   false, // 指纹识别默认不限制跨域跳转
 		}
 
-		if !c.followRedirect {
-			return body, statusCode, headers, nil
+	// 构造Fetcher适配器
+	fetcher := &httpClientFetcher{
+		client:        c,
+		customHeaders: customHeaders,
 		}
 
-		// 检测客户端重定向
-		redirectURL := redirect.DetectClientRedirectURL(body)
-		if redirectURL == "" {
-			return body, statusCode, headers, nil
-		}
-
-		// 解析新的URL
-		nextURL := redirect.ResolveRedirectURL(url, redirectURL)
-		if nextURL == "" {
-			logger.Debugf("无法解析客户端重定向URL: %s (Base: %s)", redirectURL, url)
-			return body, statusCode, headers, nil
-		}
-
-		logger.Debugf("HTTPClient 捕获客户端重定向 (%d/%d): %s -> %s", i+1, maxClientRedirects, url, nextURL)
-		url = nextURL
+	// 执行请求（包含重定向处理）
+	resp, err := redirect.Execute(rawURL, fetcher, redirectConfig)
+	if err != nil {
+		return "", 0, nil, err
 	}
 
-	return body, statusCode, headers, err
+	return resp.Body, resp.StatusCode, resp.ResponseHeaders, nil
 }
 
 func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]string) (body string, statusCode int, headers map[string][]string, err error) {

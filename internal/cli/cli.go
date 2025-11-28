@@ -857,6 +857,7 @@ func createProxy() (*proxy.Proxy, error) {
 		Addr:              serverConfig.Listen,
 		StreamLargeBodies: proxyConfig.StreamLargebody,
 		SslInsecure:       proxyConfig.SSLInsecure, // 添加缺失的SSL配置
+		Upstream:          proxyConfig.UpstreamProxy,
 	}
 	return proxy.NewProxy(opts)
 }

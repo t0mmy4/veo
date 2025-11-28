@@ -265,6 +265,12 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		RandomUserAgent: args.RandomUA,
 	}
 
+	// 应用代理配置
+	if proxyCfg := config.GetProxyConfig(); proxyCfg != nil && proxyCfg.UpstreamProxy != "" {
+		requestConfig.ProxyURL = proxyCfg.UpstreamProxy
+		logger.Debugf("ActiveScan: 设置请求处理器代理: %s", requestConfig.ProxyURL)
+	}
+
 	logger.Debugf("请求处理器并发数设置为: %d", requestConfig.MaxConcurrent)
 	logger.Debugf("请求处理器重试次数设置为: %d", requestConfig.MaxRetries)
 	logger.Debugf("请求处理器超时时间设置为: %v", requestConfig.Timeout)
@@ -346,6 +352,9 @@ func (sc *ScanController) Run() error {
 }
 
 // runActiveMode 运行主动扫描模式
+// 1. 解析并验证目标
+// 2. 顺序执行配置的模块
+// 3. 如果配置了端口扫描，则进行端口扫描并对结果进行二次扫描
 func (sc *ScanController) runActiveMode() error {
 	logger.Debug("启动主动扫描模式")
 
@@ -402,9 +411,6 @@ func (sc *ScanController) runActiveMode() error {
 			fingerprintResults = append(fingerprintResults, newFinger...)
 		}
 	}
-
-	// [修复] 删除重复的已完成主机数更新
-	// 已完成主机数由各个模块在目标完成时单独更新，避免重复计数
 
 	return sc.finalizeScan(allResults, dirscanResults, fingerprintResults)
 }
@@ -1017,8 +1023,19 @@ func (sc *ScanController) runDirscanModule(targets []string) ([]interfaces.HTTPR
 		sc.requestProcessor.SetModuleContext(originalContext)
 	}()
 
+	// [强制配置] 在运行目录扫描前，强制更新 RequestProcessor 的重定向配置
+	reqConfig := sc.requestProcessor.GetConfig()
+	if !reqConfig.FollowRedirect || reqConfig.MaxRedirects < 3 {
+		reqConfig.FollowRedirect = true
+		if reqConfig.MaxRedirects < 3 {
+			reqConfig.MaxRedirects = 5
+		}
+		sc.requestProcessor.UpdateConfig(reqConfig)
+		logger.Debug("Dirscan模块运行前强制启用重定向跟随 (MaxRedirects=5)")
+	}
+
 	// 模块启动提示
-	dictInfo := "dict/common.txt"
+	dictInfo := "config/dict/common.txt"
 	if strings.TrimSpace(sc.wordlistPath) != "" {
 		dictInfo = sc.wordlistPath
 	}
@@ -1884,7 +1901,15 @@ func (sc *ScanController) createHTTPClientAdapter() httpclient.HTTPClientInterfa
 	if userAgent == "" {
 		userAgent = "veo-HTTPClient/1.0"
 	}
-	return httpclient.CreateClientWithUserAgent(userAgent)
+
+	// 构造配置，确保包含代理设置
+	clientConfig := httpclient.DefaultConfigWithUserAgent(userAgent)
+	if proxyCfg := config.GetProxyConfig(); proxyCfg != nil && proxyCfg.UpstreamProxy != "" {
+		clientConfig.ProxyURL = proxyCfg.UpstreamProxy
+		logger.Debugf("ActiveScan: 设置HTTPClient适配器代理: %s", clientConfig.ProxyURL)
+	}
+
+	return httpclient.New(clientConfig)
 }
 
 // extractBaseURL 从完整URL中提取基础URL（协议+主机）

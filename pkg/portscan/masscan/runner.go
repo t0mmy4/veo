@@ -38,9 +38,7 @@ func ComputeEffectiveRate(rate int) int {
 	if rate <= 0 {
 		return baseRate
 	}
-	if rate > baseRate {
-		return baseRate
-	}
+	// 用户指定的速率如果不为0，则直接使用，不设上限
 	return rate
 }
 

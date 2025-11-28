@@ -9,7 +9,7 @@ import (
 	"veo/pkg/utils/logger"
 )
 
-const defaultWordlistPath = "dict/common.txt"
+const defaultWordlistPath = "config/dict/common.txt"
 
 var (
 	globalDictCache *DictionaryCache

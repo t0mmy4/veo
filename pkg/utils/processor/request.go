@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/net/proxy"
+	netproxy "golang.org/x/net/proxy"
 
 	"veo/pkg/utils/httpclient"
 	"veo/pkg/utils/interfaces"
@@ -51,113 +51,6 @@ type RequestConfig struct {
 	RandomUserAgent bool          // 是否随机使用UserAgent
 	Delay           time.Duration // 请求延迟时间
 	ProxyURL        string        // 上游代理URL
-}
-
-// shouldFollowRedirect 判断是否应该跟随重定向（同主机/域名检查）
-func (rp *RequestProcessor) shouldFollowRedirect(currentURL, nextURL string) bool {
-	u1, err := url.Parse(currentURL)
-	if err != nil {
-		return false
-	}
-	u2, err := url.Parse(nextURL)
-	if err != nil {
-		return false
-	}
-
-	h1 := strings.ToLower(u1.Hostname())
-	h2 := strings.ToLower(u2.Hostname())
-
-	// 1. 完全相同
-	if h1 == h2 {
-		return true
-	}
-
-	// 2. 检查是否为主域名相同的子域名关系 (Containment)
-	// 满足需求：example.com -> sub.example.com (h2 ends with .h1)
-	// 反向也允许：sub.example.com -> example.com (h1 ends with .h2)
-	if strings.HasSuffix(h2, "."+h1) || strings.HasSuffix(h1, "."+h2) {
-		return true
-	}
-
-	return false
-}
-
-// followClientRedirect 检测并跟随客户端重定向（meta refresh / JS），返回新的响应。
-func (rp *RequestProcessor) followClientRedirect(response *interfaces.HTTPResponse) *interfaces.HTTPResponse {
-	if rp.redirectClient == nil || response == nil {
-		return nil
-	}
-
-	// 手动执行重定向检测，以便插入同主机检查逻辑
-	redirectBody := response.ResponseBody
-	if redirectBody == "" {
-		redirectBody = response.Body
-	}
-	if strings.TrimSpace(redirectBody) == "" {
-		return nil
-	}
-
-	redirectURL := redirect.DetectClientRedirectURL(redirectBody)
-	if redirectURL == "" {
-		return nil
-	}
-
-	absoluteURL := redirect.ResolveRedirectURL(response.URL, redirectURL)
-	if absoluteURL == "" {
-		return nil
-	}
-
-	// [新增] 检查是否允许跟随重定向（同主机限制）
-	if !rp.shouldFollowRedirect(response.URL, absoluteURL) {
-		logger.Debugf("放弃跨主机客户端重定向: %s -> %s", response.URL, absoluteURL)
-		return nil
-	}
-
-	var body string
-	var statusCode int
-	var headers map[string][]string
-	var err error
-
-	// 使用redirectClient发起请求
-	if fullFetcher, ok := rp.redirectClient.(redirect.HTTPFetcherFull); ok {
-		body, statusCode, headers, err = fullFetcher.MakeRequestFull(absoluteURL)
-	} else {
-		body, statusCode, err = rp.redirectClient.MakeRequest(absoluteURL)
-	}
-
-	if err != nil {
-		logger.Debugf("客户端重定向请求失败: %v", err)
-		return nil
-	}
-	if strings.TrimSpace(body) == "" {
-		return nil
-	}
-
-	title := rp.titleExtractor.ExtractTitle(body)
-
-	redirected := &interfaces.HTTPResponse{
-		URL:             absoluteURL,
-		Method:          "GET",
-		StatusCode:      statusCode,
-		Body:            body,
-		ResponseBody:    body,
-		ContentType:     "", // 简化处理
-		ContentLength:   int64(len(body)),
-		Length:          int64(len(body)),
-		Title:           title,
-		ResponseHeaders: headers,
-		IsDirectory:     strings.HasSuffix(absoluteURL, "/"),
-	}
-
-	// 继承部分元数据，便于后续处理
-	redirected.RequestHeaders = response.RequestHeaders
-	// redirected.ResponseHeaders = response.ResponseHeaders // 不继承响应头，使用新的
-	redirected.Server = response.Server // Server信息可能需要更新，这里暂时保留原逻辑或简化
-	redirected.Duration = response.Duration
-	redirected.Depth = response.Depth
-
-	logger.Debugf("客户端重定向成功: %s -> %s", response.URL, redirected.URL)
-	return redirected
 }
 
 // ProcessingStats 处理统计信息 (原progress.go内容)
@@ -506,11 +399,23 @@ func (rp *RequestProcessor) processURLWithStats(targetURL string, responses *[]*
 	rp.updateProcessingStats(response, targetURL, responses, responsesMu, stats)
 }
 
+// requestFetcher 适配器，用于将RequestProcessor适配为redirect.HTTPFetcherFull接口
+type requestFetcher struct {
+	rp *RequestProcessor
+}
+
+func (f *requestFetcher) MakeRequestFull(rawURL string) (string, int, map[string][]string, error) {
+	resp, err := f.rp.makeRequest(rawURL)
+	if err != nil {
+		return "", 0, nil, err
+	}
+	return resp.Body, resp.StatusCode, resp.ResponseHeaders, nil
+}
+
 // processURL 处理单个URL
 func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 	var response *interfaces.HTTPResponse
 	var err error
-	var redirectCount int
 
 	// 改进的重试逻辑（指数退避 + 抖动）
 	for attempt := 0; attempt <= rp.config.MaxRetries; attempt++ {
@@ -518,45 +423,18 @@ func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 			logger.Debug(fmt.Sprintf("重试 %d/%d: %s", attempt, rp.config.MaxRetries, url))
 		}
 
-		response, err = rp.makeRequest(url)
+		// 构造重定向配置
+		redirectConfig := &redirect.Config{
+			MaxRedirects:   rp.config.MaxRedirects,
+			FollowRedirect: rp.config.FollowRedirect,
+			SameHostOnly:   true, // 保持同主机限制策略
+		}
+
+		// 执行请求（包含重定向处理）
+		fetcher := &requestFetcher{rp: rp}
+		response, err = redirect.Execute(url, fetcher, redirectConfig)
+
 		if err == nil {
-			// 处理 301/302 等重定向（仅在FollowRedirect开启时）
-			if rp.config.FollowRedirect && response != nil && redirect.IsRedirectStatus(response.StatusCode) {
-				if redirectCount >= rp.config.MaxRedirects && rp.config.MaxRedirects > 0 {
-					logger.Warnf("超过最大重定向次数(%d): %s", rp.config.MaxRedirects, url)
-					return response
-				}
-				loc := redirect.GetHeaderFirst(response.ResponseHeaders, "Location")
-				if loc == "" {
-					return response
-				}
-				nextURL := redirect.ResolveRedirectURL(url, loc)
-				if nextURL == "" {
-					return response
-				}
-
-				// [新增] 检查是否允许跟随重定向（同主机限制）
-				if !rp.shouldFollowRedirect(url, nextURL) {
-					logger.Debugf("放弃跨主机重定向: %s -> %s", url, nextURL)
-					return response
-				}
-
-				redirectCount++
-				logger.Debugf("跟随重定向 %d -> %s", response.StatusCode, nextURL)
-				url = nextURL
-				// 继续外层重试循环，但不递增 attempt（认为是同一次尝试的跳转）
-				attempt--
-				continue
-			}
-			// 处理客户端重定向（meta refresh / JS），最多跟随3次
-			// 确保在目录扫描与指纹识别之前，完全做到跟随跳转，在最终页面进行处理
-			for i := 0; i < 3; i++ {
-				if redirected := rp.followClientRedirect(response); redirected != nil {
-					response = redirected
-				} else {
-					break
-				}
-			}
 			return response
 		}
 
@@ -1214,19 +1092,54 @@ func createFastHTTPClient(config *RequestConfig) *fasthttp.Client {
 	if config.ProxyURL != "" {
 		u, err := url.Parse(config.ProxyURL)
 		if err == nil {
-			var dialer proxy.Dialer
+			var dialer netproxy.Dialer
 			// 支持SOCKS5
 			if strings.HasPrefix(config.ProxyURL, "socks5") {
-				dialer, err = proxy.FromURL(u, proxy.Direct)
-			}
-
-			if dialer != nil {
-				client.Dial = func(addr string) (net.Conn, error) {
-					return dialer.Dial("tcp", addr)
+				dialer, err = netproxy.FromURL(u, netproxy.Direct)
+				if dialer != nil {
+					client.Dial = func(addr string) (net.Conn, error) {
+						return dialer.Dial("tcp", addr)
+					}
+					logger.Debugf("Fasthttp使用SOCKS5代理: %s", config.ProxyURL)
 				}
-				logger.Debugf("Fasthttp使用SOCKS5代理: %s", config.ProxyURL)
 			} else if strings.HasPrefix(config.ProxyURL, "http") {
-				logger.Warnf("Fasthttp暂不支持HTTP代理，仅支持SOCKS5: %s", config.ProxyURL)
+				// 手动实现HTTP代理的CONNECT隧道支持
+				proxyAddr := u.Host
+				client.Dial = func(addr string) (net.Conn, error) {
+					// 1. 连接到代理服务器
+					conn, err := net.DialTimeout("tcp", proxyAddr, config.ConnectTimeout)
+					if err != nil {
+						return nil, err
+					}
+
+					// 2. 发送CONNECT请求（即使是HTTP目标，使用CONNECT隧道也是最可靠的通用方法）
+					// 注意：某些HTTP代理可能不支持对80端口的CONNECT，但现代代理通常都支持
+					connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", addr, addr)
+					if _, err := conn.Write([]byte(connectReq)); err != nil {
+						conn.Close()
+						return nil, err
+					}
+
+					// 3. 读取代理响应
+					// 简单读取直到遇到\r\n\r\n，并检查状态码
+					// 这里做一个简单的缓冲读取
+					buf := make([]byte, 1024)
+					n, err := conn.Read(buf)
+					if err != nil {
+						conn.Close()
+						return nil, err
+					}
+
+					response := string(buf[:n])
+					if !strings.Contains(response, "200 Connection established") && !strings.Contains(response, "200 OK") {
+						conn.Close()
+						return nil, fmt.Errorf("代理连接失败: %s", response)
+					}
+
+					// 4. 连接建立成功，返回连接
+					return conn, nil
+				}
+				logger.Debugf("Fasthttp使用HTTP代理(CONNECT模式): %s", config.ProxyURL)
 			}
 		} else {
 			logger.Warnf("无效的代理URL: %s, 错误: %v", config.ProxyURL, err)
@@ -1396,6 +1309,11 @@ func (rp *RequestProcessor) isRedirectError(err error) bool {
 // ============================================================================
 // 配置相关功能 (原config.go内容)
 // ============================================================================
+
+// GetDefaultConfig 暴露默认配置获取方法（测试用）
+func GetDefaultConfig() *RequestConfig {
+	return getDefaultConfig()
+}
 
 // getDefaultConfig 获取默认配置
 func getDefaultConfig() *RequestConfig {

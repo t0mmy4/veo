@@ -210,17 +210,29 @@ func (e *Engine) getOrCreateRequestProcessor() *requests.RequestProcessor {
 	if e.requestProcessor == nil {
 		logger.Debug("创建新的请求处理器")
 		e.requestProcessor = requests.NewRequestProcessor(nil)
-
-		// 应用代理配置
-		if e.config.ProxyURL != "" {
-			reqConfig := e.requestProcessor.GetConfig()
-			reqConfig.ProxyURL = e.config.ProxyURL
-			e.requestProcessor.UpdateConfig(reqConfig)
-			logger.Debugf("Dirscan使用代理: %s", e.config.ProxyURL)
-		}
-
-		// Custom headers should be set via SetCustomHeaders method by the caller
 	}
+
+	// [重构] 强制设置配置，不依赖于之前的状态，确保幂等性
+	reqConfig := e.requestProcessor.GetConfig()
+
+	// 1. 始终应用代理配置（如果有）
+	if e.config.ProxyURL != "" {
+		reqConfig.ProxyURL = e.config.ProxyURL
+	}
+
+	// 2. 始终强制开启重定向跟随，且至少允许5次跳转
+	// 这是目录扫描的核心需求：必须看到最终页面才能正确去重
+	reqConfig.FollowRedirect = true
+	if reqConfig.MaxRedirects < 5 {
+		reqConfig.MaxRedirects = 5
+	}
+
+	// 3. 直接更新，无需条件判断，确保配置绝对生效
+	e.requestProcessor.UpdateConfig(reqConfig)
+
+	// 强行日志输出，验证配置是否生效
+	// logger.Debugf("Dirscan配置已强制同步: Proxy=%s, FollowRedirect=%v, MaxRedirects=%d",
+	// 	reqConfig.ProxyURL, reqConfig.FollowRedirect, reqConfig.MaxRedirects)
 
 	return e.requestProcessor
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"veo/pkg/utils/interfaces"
+	"veo/pkg/utils/logger"
 	"veo/pkg/utils/shared"
 )
 
@@ -18,6 +19,22 @@ type HTTPFetcher interface {
 // HTTPFetcherFull 扩展的HTTP客户端接口，支持返回响应头。
 type HTTPFetcherFull interface {
 	MakeRequestFull(rawURL string) (body string, statusCode int, headers map[string][]string, err error)
+}
+
+// Config 跳转跟随配置
+type Config struct {
+	MaxRedirects   int  // 最大跳转次数
+	FollowRedirect bool // 是否跟随跳转
+	SameHostOnly   bool // 是否限制同域名/子域名跳转
+}
+
+// DefaultConfig 默认配置
+func DefaultConfig() *Config {
+	return &Config{
+		MaxRedirects:   5,
+		FollowRedirect: true,
+		SameHostOnly:   true,
+	}
 }
 
 // IsRedirectStatus checks if the status code indicates a redirect.
@@ -71,8 +88,130 @@ func ResolveRedirectURL(baseRaw, ref string) string {
 	return base.ResolveReference(u).String()
 }
 
+// ShouldFollowRedirect 判断是否应该跟随重定向（同主机/域名检查）
+func ShouldFollowRedirect(currentURL, nextURL string) bool {
+	u1, err := url.Parse(currentURL)
+	if err != nil {
+		return false
+	}
+	u2, err := url.Parse(nextURL)
+	if err != nil {
+		return false
+	}
+
+	h1 := strings.ToLower(u1.Hostname())
+	h2 := strings.ToLower(u2.Hostname())
+
+	// 1. 完全相同
+	if h1 == h2 {
+		return true
+	}
+
+	// 2. 检查是否为主域名相同的子域名关系 (Containment)
+	// 满足需求：example.com -> sub.example.com (h2 ends with .h1)
+	// 反向也允许：sub.example.com -> example.com (h1 ends with .h2)
+	if strings.HasSuffix(h2, "."+h1) || strings.HasSuffix(h1, "."+h2) {
+		return true
+	}
+
+	return false
+}
+
+// Execute 执行请求并处理跳转逻辑（整合了HTTP 3xx和客户端跳转）
+func Execute(rawURL string, fetcher HTTPFetcherFull, config *Config) (*interfaces.HTTPResponse, error) {
+	if config == nil {
+		config = DefaultConfig()
+	}
+
+	currentURL := rawURL
+	var response *interfaces.HTTPResponse
+	var redirectCount int
+
+	// 循环处理跳转
+	for {
+		// 1. 发起请求
+		body, statusCode, headers, err := fetcher.MakeRequestFull(currentURL)
+		if err != nil {
+			return nil, err
+		}
+
+		// 构建基础响应对象
+		response = &interfaces.HTTPResponse{
+			URL:             currentURL,
+			Method:          "GET",
+			StatusCode:      statusCode,
+			Body:            body,
+			ResponseBody:    body,
+			ResponseHeaders: headers,
+			ContentLength:   int64(len(body)),
+			Length:          int64(len(body)),
+			IsDirectory:     strings.HasSuffix(currentURL, "/"),
+		}
+		
+		// 提取标题
+		titleExtractor := shared.NewTitleExtractor()
+		response.Title = titleExtractor.ExtractTitle(body)
+		
+		// 如果不跟随重定向，直接返回
+		if !config.FollowRedirect {
+			return response, nil
+		}
+
+		// 检查是否达到最大重定向次数
+		if redirectCount >= config.MaxRedirects {
+			logger.Warnf("超过最大重定向次数(%d): %s", config.MaxRedirects, currentURL)
+			return response, nil
+		}
+
+		var nextURL string
+		isRedirect := false
+
+		// 2. 检查 HTTP 3xx 重定向
+		if IsRedirectStatus(statusCode) {
+			loc := GetHeaderFirst(headers, "Location")
+			if loc != "" {
+				nextURL = ResolveRedirectURL(currentURL, loc)
+				if nextURL != "" {
+					isRedirect = true
+					logger.Debugf("捕获HTTP重定向 %d: %s -> %s", statusCode, currentURL, nextURL)
+				}
+			}
+		}
+
+		// 3. 如果不是HTTP重定向，检查客户端跳转 (Meta/JS)
+		// 对所有非 3xx（isRedirect=false）且有Body的响应进行检查
+		if !isRedirect && statusCode >= 200 {
+			redirectLink := DetectClientRedirectURL(body)
+			if redirectLink != "" {
+				resolvedURL := ResolveRedirectURL(currentURL, redirectLink)
+				if resolvedURL != "" {
+					nextURL = resolvedURL
+					isRedirect = true
+					logger.Debugf("捕获客户端重定向: %s -> %s", currentURL, nextURL)
+				}
+			}
+		}
+
+		// 如果没有检测到任何跳转，结束
+		if !isRedirect {
+			return response, nil
+		}
+
+		// 4. 安全检查：同域/子域限制
+		if config.SameHostOnly && !ShouldFollowRedirect(currentURL, nextURL) {
+			logger.Debugf("放弃跨主机重定向: %s -> %s", currentURL, nextURL)
+			return response, nil
+		}
+
+		// 5. 准备下一次循环
+		redirectCount++
+		currentURL = nextURL
+	}
+}
+
 // FollowClientRedirect 检测并跟随客户端（HTML/JS）重定向，返回新的HTTP响应。
 // 若未检测到重定向或获取失败，返回nil。
+// Deprecated: Use Execute instead for comprehensive redirect handling.
 func FollowClientRedirect(response *interfaces.HTTPResponse, fetcher HTTPFetcher) (*interfaces.HTTPResponse, error) {
 	if response == nil || fetcher == nil {
 		return nil, nil
