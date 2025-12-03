@@ -54,12 +54,13 @@ type CLIArgs struct {
 	Modules    []string // 启用的模块 (-m)
 	Port       int      // 监听端口 (--lp)
 	// 端口扫描（masscan）相关
-	Ports    string // 扫描端口表达式 (-p 例如: 80,443,8000-8100 或 1-65535)
-	Rate     int    // 扫描速率 (--rate，包/秒)
-	Wordlist string // 自定义字典路径 (-w)
-	Listen   bool   // 被动代理模式 (--listen)
-	Proxy    string // 上游代理地址 (--proxy)
-	Debug    bool   // 调试模式 (--debug)
+	Ports     string // 扫描端口表达式 (-p 例如: 80,443,8000-8100 或 1-65535)
+	Rate      int    // 扫描速率 (--rate，包/秒)
+	PortRetry int    // 端口扫描重试次数 (-pr/--port-retry)
+	Wordlist  string // 自定义字典路径 (-w)
+	Listen    bool   // 被动代理模式 (--listen)
+	Proxy     string // 上游代理地址 (--proxy)
+	Debug     bool   // 调试模式 (--debug)
 
 	// 新增：线程并发控制和全局配置参数
 	Threads int // 统一线程并发数量 (-t, --threads)
@@ -216,6 +217,8 @@ func ParseCLIArgs() *CLIArgs {
 		threads     = flag.Int("t", 0, "统一线程并发数量，对所有模块生效 (默认: 200)")
 		threadsLong = flag.Int("threads", 0, "统一线程并发数量，对所有模块生效 (默认: 200)")
 		retry       = flag.Int("retry", 0, "扫描失败目标的重试次数 (默认: 1)")
+		portRetry   = flag.Int("pr", 0, "端口扫描超时重试次数 (默认: 0，仅在超时时重试)")
+		portRetryL  = flag.Int("port-retry", 0, "端口扫描超时重试次数 (默认: 0，仅在超时时重试)")
 		timeout     = flag.Int("timeout", 0, "全局连接超时时间(秒)，对所有模块生效 (默认: 3)")
 
 		// 新增：报告输出控制参数
@@ -273,6 +276,7 @@ func ParseCLIArgs() *CLIArgs {
 		// 新增参数处理：支持短参数和长参数
 		Threads:            getMaxInt(*threads, *threadsLong),
 		Retry:              *retry,
+		PortRetry:          getMaxInt(*portRetry, *portRetryL),
 		Timeout:            *timeout,
 		Output:             getStringValue(*output, *outputLong),
 		Stats:              *stats,
@@ -385,6 +389,7 @@ veo - 端口扫描/指纹识别/目录扫描
 性能调优:
   -t, --threads int    全局并发线程数（默认 200）
   --retry int          失败重试次数（默认 1）
+  -pr, --port-retry int 端口扫描超时重试次数（默认 0）
   --timeout int        全局超时时间（秒，默认 3）
 
 目录扫描:
@@ -1508,6 +1513,13 @@ func runPortScanAndCollect(args *CLIArgs, baseTargets []string, announce bool, p
 	}
 	if args.Threads > 0 {
 		scannerOpts = append(scannerOpts, gogoscanner.WithThreads(args.Threads))
+	}
+	// 应用端口扫描专用重试参数
+	if args.PortRetry > 0 {
+		scannerOpts = append(scannerOpts, gogoscanner.WithRetry(args.PortRetry))
+	} else if args.Retry > 0 {
+		// 如果未指定-pr，可以使用全局retry作为回退，或者保持默认
+		scannerOpts = append(scannerOpts, gogoscanner.WithRetry(args.Retry))
 	}
 
 	scanner := gogoscanner.NewScanner(scannerOpts...)
