@@ -114,7 +114,7 @@ func (sc *ScanController) runConcurrentDirscan(ctx context.Context, targets []st
 	var resultsMu sync.Mutex
 
 	scheduler.SetResultCallback(func(target string, resp *interfaces.HTTPResponse) {
-		sc.handleRealTimeResult(target, resp, filter, &allResults, &resultsMu)
+		sc.handleRealTimeResult(ctx, target, resp, filter, &allResults, &resultsMu)
 	})
 
 	// 执行并发扫描
@@ -158,7 +158,7 @@ func (sc *ScanController) runSequentialDirscan(ctx context.Context, targets []st
 		// 发起HTTP请求（实时处理）
 		// 使用 ProcessURLsWithCallback 替代 ProcessURLs
 		sc.requestProcessor.ProcessURLsWithCallback(scanURLs, func(resp *interfaces.HTTPResponse) {
-			sc.handleRealTimeResult(target, resp, filter, &allResults, nil)
+			sc.handleRealTimeResult(ctx, target, resp, filter, &allResults, nil)
 		})
 
 		// 更新已完成主机数统计（单目标扫描）
@@ -214,12 +214,12 @@ func (sc *ScanController) generateDirscanURLs(target string, recursive bool) []s
 }
 
 // handleRealTimeResult 处理实时扫描结果（DRY优化）
-func (sc *ScanController) handleRealTimeResult(target string, resp *interfaces.HTTPResponse, filter *dirscan.ResponseFilter, results *[]interfaces.HTTPResponse, mu *sync.Mutex) {
+func (sc *ScanController) handleRealTimeResult(ctx context.Context, target string, resp *interfaces.HTTPResponse, filter *dirscan.ResponseFilter, results *[]interfaces.HTTPResponse, mu *sync.Mutex) {
 	if resp == nil {
 		return
 	}
 	// 调用 processTargetResponses 处理单个响应（包含过滤、去重、打印）
-	validPages, _ := sc.processTargetResponses([]*interfaces.HTTPResponse{resp}, target, filter)
+	validPages, _ := sc.processTargetResponses(ctx, []*interfaces.HTTPResponse{resp}, target, filter)
 
 	if len(validPages) > 0 {
 		if mu != nil {

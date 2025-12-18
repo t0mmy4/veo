@@ -147,7 +147,7 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 
 	if fpEngine != nil {
 		// 启用snippet捕获(用于报告)
-		fpEngine.EnableSnippet(true)
+		fpEngine.GetConfig().ShowSnippet = true
 
 		// 创建OutputFormatter并注入到Engine
 		var outputFormatter fingerprint.OutputFormatter
@@ -161,7 +161,7 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 				snippetEnabled, // consoleSnippetEnabled
 			)
 		}
-		fpEngine.SetOutputFormatter(outputFormatter)
+		fpEngine.GetConfig().OutputFormatter = outputFormatter
 		logger.Debugf("指纹引擎 OutputFormatter 已注入: %T", outputFormatter)
 	}
 

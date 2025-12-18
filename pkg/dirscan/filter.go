@@ -1,11 +1,13 @@
 package dirscan
 
 import (
+	"crypto/md5"
 	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"veo/pkg/utils/formatter"
+	"veo/pkg/utils/httpclient"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
 	sharedutils "veo/pkg/utils/shared"
@@ -91,17 +93,18 @@ func getGlobalFilterConfig() *FilterConfig {
 	return nil
 }
 
-// ResponseFilter 响应过滤器（重构版，使用策略模式）
+// ResponseFilter 响应过滤器（简化版，移除过度设计的策略模式）
 type ResponseFilter struct {
-	config            *FilterConfig             // 过滤器配置
-	statusCodeFilter  StatusCodeFilterStrategy  // 状态码过滤策略
-	hashFilter        HashFilterStrategy        // 哈希过滤策略
-	secondaryFilter   SecondaryFilterStrategy   // 二次筛选策略
-	contentTypeFilter ContentTypeFilterStrategy // Content-Type过滤策略
-	mu                sync.RWMutex              // 读写锁
+	config *FilterConfig
+	mu     sync.RWMutex
 
-	// [新增] 可选的指纹识别引擎（用于目录扫描结果的二次识别）
+	// 内部过滤状态
+	primaryHashMap   map[string]*interfaces.PageHash
+	secondaryHashMap map[string]*interfaces.PageHash
+
+	// 指纹识别引擎
 	fingerprintEngine      interfaces.FingerprintAnalyzer
+	httpClient             httpclient.HTTPClientInterface // 用于指纹识别的主动探测（如icon hash）
 	showFingerprintSnippet bool
 	showFingerprintRule    bool
 }
@@ -112,24 +115,10 @@ func NewResponseFilter(config *FilterConfig) *ResponseFilter {
 		config = DefaultFilterConfig()
 	}
 
-	// 创建过滤策略（传递容错阈值）
-	statusCodeFilter := NewStatusCodeFilter(config.ValidStatusCodes)
-	var hashFilter HashFilterStrategy
-	var secondaryFilter SecondaryFilterStrategy
-	if !config.DisableHashFilter {
-		hashFilter = NewHashFilter(config.InvalidPageThreshold, config.FilterTolerance)
-		secondaryFilter = NewSecondaryFilter(config.SecondaryThreshold, config.FilterTolerance)
-	} else {
-		logger.Infof("哈希过滤已禁用 (--no-filter)，将保留所有目录扫描响应")
-	}
-	contentTypeFilter := NewContentTypeFilter(config.FilteredContentTypes)
-
 	rf := &ResponseFilter{
-		config:            config,
-		statusCodeFilter:  statusCodeFilter,
-		hashFilter:        hashFilter,
-		secondaryFilter:   secondaryFilter,
-		contentTypeFilter: contentTypeFilter,
+		config:           config,
+		primaryHashMap:   make(map[string]*interfaces.PageHash),
+		secondaryHashMap: make(map[string]*interfaces.PageHash),
 	}
 
 	logger.Debugf("响应过滤器创建完成 - 容错阈值: %d 字节", config.FilterTolerance)
@@ -142,6 +131,14 @@ func (rf *ResponseFilter) SetFingerprintEngine(engine interfaces.FingerprintAnal
 	defer rf.mu.Unlock()
 	rf.fingerprintEngine = engine
 	logger.Debug("响应过滤器已设置指纹识别引擎，启用二次识别")
+}
+
+// SetHTTPClient 设置HTTP客户端（用于指纹识别的主动探测）
+func (rf *ResponseFilter) SetHTTPClient(client httpclient.HTTPClientInterface) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.httpClient = client
+	logger.Debug("响应过滤器已设置HTTP客户端，启用icon()等主动探测支持")
 }
 
 func (rf *ResponseFilter) EnableFingerprintSnippet(enabled bool) {
@@ -158,105 +155,173 @@ func (rf *ResponseFilter) EnableFingerprintRuleDisplay(enabled bool) {
 
 // FilterResponses 过滤响应列表
 func (rf *ResponseFilter) FilterResponses(responses []interfaces.HTTPResponse) *interfaces.FilterResult {
-	rf.mu.RLock()
-	config := rf.config
-	rf.mu.RUnlock()
+	rf.mu.Lock()
+	// 注意：这里移除了 defer rf.mu.Unlock()，改为手动管理锁以优化性能和避免死锁
 
+	config := rf.config
 	result := &interfaces.FilterResult{
 		StatusFilteredPages:  make([]interfaces.HTTPResponse, 0),
 		PrimaryFilteredPages: make([]interfaces.HTTPResponse, 0),
 		ValidPages:           make([]interfaces.HTTPResponse, 0),
-		InvalidPageHashes:    make([]interfaces.PageHash, 0),
-		SecondaryHashResults: make([]interfaces.PageHash, 0),
 		TotalProcessed:       len(responses),
 	}
 
-	currentResponses := responses
+	// 临时切片用于管道处理
+	var step1 []interfaces.HTTPResponse // After Status Filter
+	var step2 []interfaces.HTTPResponse // After ContentType Filter
+	var step3 []interfaces.HTTPResponse // After Primary Hash Filter
 
 	// 步骤1: 状态码过滤
-	if config.EnableStatusFilter && rf.statusCodeFilter != nil {
-		currentResponses = rf.statusCodeFilter.Filter(currentResponses)
-		result.StatusFilteredPages = currentResponses
-		result.StatusFiltered = len(currentResponses)
-	} else {
-		result.StatusFilteredPages = currentResponses
-		result.StatusFiltered = len(currentResponses)
+	for _, resp := range responses {
+		if !config.EnableStatusFilter || rf.isValidStatusCode(resp.StatusCode) {
+			step1 = append(step1, resp)
+		} else {
+			result.StatusFilteredPages = append(result.StatusFilteredPages, resp)
+		}
 	}
+	result.StatusFiltered = len(result.StatusFilteredPages)
 
 	// 步骤2: Content-Type过滤
-	if config.EnableContentTypeFilter && rf.contentTypeFilter != nil {
-		currentResponses = rf.contentTypeFilter.Filter(currentResponses)
-		logger.Debugf("Content-Type过滤后剩余响应数量: %d", len(currentResponses))
+	for _, resp := range step1 {
+		if !config.EnableContentTypeFilter || !checkContentTypeAgainstRules(resp.ContentType, config.FilteredContentTypes) {
+			step2 = append(step2, resp)
+		}
 	}
 
-	// 步骤3: 主要无效页面过滤
-	if rf.hashFilter != nil {
-		currentResponses = rf.hashFilter.Filter(currentResponses)
-		result.PrimaryFilteredPages = currentResponses
-		result.PrimaryFiltered = len(currentResponses)
+	// 步骤3: 主要无效页面过滤 (Hash)
+	if !config.DisableHashFilter {
+		for _, resp := range step2 {
+			if rf.checkPrimaryHash(resp) {
+				result.PrimaryFilteredPages = append(result.PrimaryFilteredPages, resp)
+			} else {
+				step3 = append(step3, resp)
+			}
+		}
 	} else {
-		result.PrimaryFilteredPages = currentResponses
-		result.PrimaryFiltered = len(currentResponses)
+		step3 = step2
 	}
+	result.PrimaryFiltered = len(result.PrimaryFilteredPages)
 
 	// 步骤4: 二次筛选
-	if rf.secondaryFilter != nil {
-		currentResponses = rf.secondaryFilter.Filter(currentResponses)
-		result.ValidPages = currentResponses
-		result.SecondaryFiltered = len(currentResponses)
+	if !config.DisableHashFilter {
+		for _, resp := range step3 {
+			if !rf.checkSecondaryHash(resp) {
+				result.ValidPages = append(result.ValidPages, resp)
+			}
+		}
 	} else {
-		result.ValidPages = currentResponses
-		result.SecondaryFiltered = len(currentResponses)
+		result.ValidPages = step3
 	}
+	result.SecondaryFiltered = len(step3) - len(result.ValidPages)
 
-	// 步骤5: 收集哈希统计
-	if rf.hashFilter != nil {
-		result.InvalidPageHashes = rf.hashFilter.GetInvalidPageHashes()
-	}
-	if rf.secondaryFilter != nil {
-		result.SecondaryHashResults = rf.secondaryFilter.GetSecondaryHashResults()
-	}
+	// 收集统计信息 (用于报告)
+	result.InvalidPageHashes = rf.collectHashes(rf.primaryHashMap, config.InvalidPageThreshold)
+	result.SecondaryHashResults = rf.collectHashes(rf.secondaryHashMap, config.SecondaryThreshold)
 
 	// 步骤6: 结果去重 (基于URL)
-	// 解决多个不同Payload重定向到同一个最终URL导致的结果重复问题
 	result.ValidPages = rf.deduplicateValidPages(result.ValidPages)
 
-	// 步骤7: 对所有页面执行指纹识别（包括被过滤的页面）
-	// 这样在报告中所有页面都能显示指纹信息
-	rf.mu.RLock()
-	hasEngine := rf.fingerprintEngine != nil
-	rf.mu.RUnlock()
+	// 获取指纹引擎引用、配置和HTTP客户端，以便在锁外执行
+	engine := rf.fingerprintEngine
+	client := rf.httpClient
+	showRule := rf.showFingerprintRule
+	
+	// 释放锁，避免指纹识别期间阻塞其他请求，并防止死锁
+	rf.mu.Unlock()
 
-	if hasEngine {
-		// 对 ValidPages 执行指纹识别
-		for i := range result.ValidPages {
-			matches, _ := rf.performFingerprintRecognition(&result.ValidPages[i])
-			if len(matches) > 0 {
-				result.ValidPages[i].Fingerprints = matches
-			}
-		}
-
-		// 对 PrimaryFilteredPages 执行指纹识别
-		for i := range result.PrimaryFilteredPages {
-			matches, _ := rf.performFingerprintRecognition(&result.PrimaryFilteredPages[i])
-			if len(matches) > 0 {
-				result.PrimaryFilteredPages[i].Fingerprints = matches
-			}
-		}
-
-		// 对 StatusFilteredPages 执行指纹识别
-		for i := range result.StatusFilteredPages {
-			matches, _ := rf.performFingerprintRecognition(&result.StatusFilteredPages[i])
-			if len(matches) > 0 {
-				result.StatusFilteredPages[i].Fingerprints = matches
-			}
-		}
-
-		logger.Debugf("指纹识别完成 - ValidPages: %d, PrimaryFiltered: %d, StatusFiltered: %d",
-			len(result.ValidPages), len(result.PrimaryFilteredPages), len(result.StatusFilteredPages))
+	// 步骤7: 指纹识别 (对所有结果) - 在锁外执行
+	if engine != nil {
+		rf.performFingerprintOnList(result.ValidPages, engine, client, showRule)
+		rf.performFingerprintOnList(result.PrimaryFilteredPages, engine, client, showRule)
+		rf.performFingerprintOnList(result.StatusFilteredPages, engine, client, showRule)
 	}
 
 	return result
+}
+
+// 辅助方法
+
+func (rf *ResponseFilter) isValidStatusCode(code int) bool {
+	for _, v := range rf.config.ValidStatusCodes {
+		if code == v {
+			return true
+		}
+	}
+	return false
+}
+
+func (rf *ResponseFilter) checkPrimaryHash(resp interfaces.HTTPResponse) bool {
+	tolerantLength := rf.calculateTolerantContentLength(resp.ContentLength, rf.config.FilterTolerance)
+	hashSource := fmt.Sprintf("%d|%s|%d", resp.StatusCode, strings.TrimSpace(resp.Title), tolerantLength)
+	hash := fmt.Sprintf("%x", md5.Sum([]byte(hashSource)))
+	
+	return rf.updateAndCheckHash(rf.primaryHashMap, hash, resp, rf.config.InvalidPageThreshold)
+}
+
+func (rf *ResponseFilter) checkSecondaryHash(resp interfaces.HTTPResponse) bool {
+	// 二次筛选使用更严格的容错 (40%)
+	tolerance := rf.config.FilterTolerance * 40 / 100
+	if tolerance < 20 { tolerance = 20 }
+	
+	tolerantLength := rf.calculateTolerantContentLength(resp.ContentLength, tolerance)
+	hashSource := fmt.Sprintf("%s|%d|%d", strings.TrimSpace(resp.Title), tolerantLength, resp.StatusCode)
+	hash := fmt.Sprintf("%x", md5.Sum([]byte(hashSource)))
+
+	return rf.updateAndCheckHash(rf.secondaryHashMap, hash, resp, rf.config.SecondaryThreshold)
+}
+
+func (rf *ResponseFilter) updateAndCheckHash(m map[string]*interfaces.PageHash, hash string, resp interfaces.HTTPResponse, threshold int) bool {
+	if item, exists := m[hash]; exists {
+		item.Count++
+		return item.Count > threshold
+	}
+	m[hash] = &interfaces.PageHash{
+		Hash:          hash,
+		Count:         1,
+		StatusCode:    resp.StatusCode,
+		Title:         resp.Title,
+		ContentLength: resp.ContentLength,
+		ContentType:   resp.ContentType,
+	}
+	return false
+}
+
+func (rf *ResponseFilter) calculateTolerantContentLength(length int64, tolerance int64) int64 {
+	if tolerance == 0 { return length }
+	
+	var step int64 = tolerance
+	// 动态步长
+	if length < 1000 {
+		if step < 20 { step = 20 }
+	} else if length < 5000 {
+		step = 500
+	} else if length < 10000 {
+		step = 1000
+	} else {
+		step = 2000
+	}
+	if step < tolerance { step = tolerance }
+	
+	return ((length + step/2) / step) * step
+}
+
+func (rf *ResponseFilter) collectHashes(m map[string]*interfaces.PageHash, threshold int) []interfaces.PageHash {
+	var list []interfaces.PageHash
+	for _, h := range m {
+		if h.Count > threshold {
+			list = append(list, *h)
+		}
+	}
+	return list
+}
+
+func (rf *ResponseFilter) performFingerprintOnList(list []interfaces.HTTPResponse, engine interfaces.FingerprintAnalyzer, client httpclient.HTTPClientInterface, showRule bool) {
+	for i := range list {
+		matches, _ := rf.performFingerprintRecognition(&list[i], engine, client, showRule)
+		if len(matches) > 0 {
+			list[i].Fingerprints = matches
+		}
+	}
 }
 
 // deduplicateValidPages 对有效页面进行去重（基于URL）
@@ -286,19 +351,7 @@ func (rf *ResponseFilter) deduplicateValidPages(pages []interfaces.HTTPResponse)
 func (rf *ResponseFilter) UpdateConfig(config *FilterConfig) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
 	rf.config = config
-
-	// 更新各个策略的配置
-	if rf.statusCodeFilter != nil {
-		rf.statusCodeFilter.UpdateValidStatusCodes(config.ValidStatusCodes)
-	}
-	if rf.hashFilter != nil {
-		rf.hashFilter.UpdateThreshold(config.InvalidPageThreshold)
-	}
-	if rf.secondaryFilter != nil {
-		rf.secondaryFilter.UpdateThreshold(config.SecondaryThreshold)
-	}
 }
 
 // GetConfig 获取当前配置
@@ -320,70 +373,24 @@ func (rf *ResponseFilter) Reset() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if rf.hashFilter != nil {
-		rf.hashFilter.Reset()
-	}
-	if rf.secondaryFilter != nil {
-		rf.secondaryFilter.Reset()
-	}
+	rf.primaryHashMap = make(map[string]*interfaces.PageHash)
+	rf.secondaryHashMap = make(map[string]*interfaces.PageHash)
 
 	logger.Debug("过滤器状态已重置")
 }
 
-// GetStatusCodeFilter 获取状态码过滤策略
-func (rf *ResponseFilter) GetStatusCodeFilter() StatusCodeFilterStrategy {
-	rf.mu.RLock()
-	defer rf.mu.RUnlock()
-	return rf.statusCodeFilter
-}
-
-// GetHashFilter 获取哈希过滤策略
-func (rf *ResponseFilter) GetHashFilter() HashFilterStrategy {
-	rf.mu.RLock()
-	defer rf.mu.RUnlock()
-	return rf.hashFilter
-}
-
-// GetSecondaryFilter 获取二次筛选策略
-func (rf *ResponseFilter) GetSecondaryFilter() SecondaryFilterStrategy {
-	rf.mu.RLock()
-	defer rf.mu.RUnlock()
-	return rf.secondaryFilter
-}
-
-// SetStatusCodeFilter 设置状态码过滤策略
-func (rf *ResponseFilter) SetStatusCodeFilter(filter StatusCodeFilterStrategy) {
+// GetInvalidPageHashes 获取无效页面哈希统计
+func (rf *ResponseFilter) GetInvalidPageHashes() []interfaces.PageHash {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
-	rf.statusCodeFilter = filter
-}
-
-// SetHashFilter 设置哈希过滤策略
-func (rf *ResponseFilter) SetHashFilter(filter HashFilterStrategy) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	rf.hashFilter = filter
-}
-
-// SetSecondaryFilter 设置二次筛选策略
-func (rf *ResponseFilter) SetSecondaryFilter(filter SecondaryFilterStrategy) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	rf.secondaryFilter = filter
+	return rf.collectHashes(rf.primaryHashMap, rf.config.InvalidPageThreshold)
 }
 
 // GetPageHashCount 获取页面哈希统计数量（兼容旧接口）
 func (rf *ResponseFilter) GetPageHashCount() int {
 	rf.mu.RLock()
 	defer rf.mu.RUnlock()
-
-	if rf.hashFilter != nil {
-		return rf.hashFilter.GetPageHashCount()
-	}
-	return 0
+	return len(rf.primaryHashMap)
 }
 
 // ============================================================================
@@ -573,7 +580,11 @@ func (rf *ResponseFilter) PrintValidPages(pages []interfaces.HTTPResponse) {
 			for i := range matches {
 				matchPtrs[i] = &matches[i]
 			}
-			fingerprintUnion = rf.formatFingerprintMatches(matchPtrs)
+			// 在打印时获取当前的规则显示设置
+			rf.mu.RLock()
+			showRule := rf.showFingerprintRule
+			rf.mu.RUnlock()
+			fingerprintUnion = rf.formatFingerprintMatches(matchPtrs, showRule)
 		}
 
 		fingerprintParts := []string{}
@@ -632,14 +643,10 @@ func (rf *ResponseFilter) PrintValidPages(pages []interfaces.HTTPResponse) {
 }
 
 // performFingerprintRecognition 对单个响应执行指纹识别
-func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPResponse) ([]interfaces.FingerprintMatch, string) {
+func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPResponse, engine interfaces.FingerprintAnalyzer, client httpclient.HTTPClientInterface, showRule bool) ([]interfaces.FingerprintMatch, string) {
 	if page == nil {
 		return nil, ""
 	}
-
-	rf.mu.RLock()
-	engine := rf.fingerprintEngine
-	rf.mu.RUnlock()
 
 	if engine == nil {
 		logger.Debugf("指纹引擎为nil，跳过识别")
@@ -658,7 +665,8 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 	logger.Debugf("开始识别: %s", page.URL)
 
 	// 直接调用接口方法
-	matches := engine.AnalyzeResponseWithClientSilent(&analysisResp, nil)
+	// 关键修复：传递 httpClient 以支持 icon() 等主动探测功能
+	matches := engine.AnalyzeResponseWithClientSilent(&analysisResp, client)
 
 	logger.Debugf("识别完成: %s, 匹配数量: %d", page.URL, len(matches))
 
@@ -671,11 +679,11 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 	}
 
 	// 格式化指纹信息
-	return convertedMatches, rf.formatFingerprintMatches(matches)
+	return convertedMatches, rf.formatFingerprintMatches(matches, showRule)
 }
 
 // formatFingerprintMatches 格式化指纹匹配结果
-func (rf *ResponseFilter) formatFingerprintMatches(matches []*interfaces.FingerprintMatch) string {
+func (rf *ResponseFilter) formatFingerprintMatches(matches []*interfaces.FingerprintMatch, showRule bool) string {
 	if len(matches) == 0 {
 		return ""
 	}
@@ -688,7 +696,7 @@ func (rf *ResponseFilter) formatFingerprintMatches(matches []*interfaces.Fingerp
 			continue
 		}
 
-		display := formatter.FormatFingerprintDisplay(match.RuleName, match.Matcher, rf.showFingerprintRule)
+		display := formatter.FormatFingerprintDisplay(match.RuleName, match.Matcher, showRule)
 		if display != "" {
 			parts = append(parts, display)
 			logger.Debugf("匹配: %s - %s", match.RuleName, match.Matcher)

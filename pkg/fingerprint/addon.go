@@ -248,7 +248,7 @@ func (fa *FingerprintAddon) SetHTTPClient(client httpclient.HTTPClientInterface)
 // EnableSnippet 控制指纹结果是否输出匹配片段
 func (fa *FingerprintAddon) EnableSnippet(enabled bool) {
 	if fa.engine != nil {
-		fa.engine.EnableSnippet(enabled)
+		fa.engine.GetConfig().ShowSnippet = enabled
 	}
 }
 

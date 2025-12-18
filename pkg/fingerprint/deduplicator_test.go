@@ -4,8 +4,8 @@ import (
 	"testing"
 )
 
-func TestInMemoryDeduplicator(t *testing.T) {
-	d := NewInMemoryDeduplicator()
+func TestDeduplicator(t *testing.T) {
+	d := NewDeduplicator()
 
 	// Test case 1: First time URL
 	url1 := "http://example.com"

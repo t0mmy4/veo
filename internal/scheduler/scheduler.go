@@ -290,8 +290,17 @@ func (ts *TargetScheduler) createTargetWorker(id int, target string) *TargetWork
 
 	// [资源优化] 复用RequestProcessor底层Client
 	if ts.baseRequestProcessor != nil {
+		// CloneWithContext 内部会复制 Config，所以我们可以安全地修改 Clone 后的 Config
 		requestProcessor = ts.baseRequestProcessor.CloneWithContext(moduleCtx, timeout)
-		logger.Debugf("复用BaseRequestProcessor创建Worker: %s", moduleCtx)
+		
+		// [关键修复] 更新MaxConcurrent为计算出的每目标并发数
+		// 之前这里使用了全局MaxConcurrent，导致 总并发 = TargetWorkers * GlobalMaxConcurrent，引发并发爆炸
+		// 现在的 CloneWithContext 已经创建了独立的 Config 副本，可以直接修改
+		requestConfig := requestProcessor.GetConfig()
+		requestConfig.MaxConcurrent = ts.urlConcurrentPerTarget
+		// 注意：不要调用 UpdateConfig，因为它会重建 Client。我们只想改变调度层的并发限制。
+		
+		logger.Debugf("复用BaseRequestProcessor创建Worker: %s (并发限制: %d)", moduleCtx, ts.urlConcurrentPerTarget)
 	} else {
 		// 回退模式：创建新的处理器（通常不应发生，因为Controller会设置Base）
 		requestConfig := &processor.RequestConfig{

@@ -41,23 +41,25 @@ type EngineConfig struct {
 	EnableFiltering bool   `yaml:"enable_filtering"` // 是否启用文件过滤
 	MaxBodySize     int    `yaml:"max_body_size"`    // 最大响应体大小
 	LogMatches      bool   `yaml:"log_matches"`      // 是否记录匹配日志
+
+	// 运行时不可变配置 (通过初始化设置)
+	StaticExtensions         []string        `yaml:"-"`
+	StaticContentTypes       []string        `yaml:"-"`
+	StaticFileFilterEnabled  bool            `yaml:"-"`
+	ContentTypeFilterEnabled bool            `yaml:"-"`
+	ShowSnippet              bool            `yaml:"-"`
+	OutputFormatter          OutputFormatter `yaml:"-"`
 }
 
 // Engine 指纹识别引擎
 type Engine struct {
-	config                   *EngineConfig
-	ruleManager              *RuleManager        // 规则管理器（负责规则加载和存储）
-	matches                  []*FingerprintMatch // 匹配结果
-	dslParser                *DSLParser                  // DSL解析器
-	mu                       sync.RWMutex                // 读写锁
-	stats                    *Statistics                 // 统计信息
-	iconCache                *IconCache                  // 图标缓存组件
-	staticExtensions         []string
-	staticContentTypes       []string
-	staticFileFilterEnabled  bool
-	contentTypeFilterEnabled bool
-	showSnippet              bool            // 是否捕获snippet(用于报告)
-	outputFormatter          OutputFormatter // 输出格式化器(可选,nil表示不输出)
+	config      *EngineConfig
+	ruleManager *RuleManager        // 规则管理器（负责规则加载和存储）
+	matches     []*FingerprintMatch // 匹配结果
+	dslParser   *DSLParser          // DSL解析器
+	stats       *Statistics         // 统计信息
+	iconCache   *IconCache          // 图标缓存组件
+	mu          sync.RWMutex        // 仅用于保护 matches 切片并发写入
 }
 
 // StringList 支持标量或数组的字符串列表解析

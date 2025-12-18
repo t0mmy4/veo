@@ -237,24 +237,8 @@ func (p *DSLParser) evaluateIcon(dsl string, ctx *DSLContext) (bool, bool) {
 			// 构造完整的图标URL
 			iconURL := ctx.BaseURL + iconPath
 
-			// 先检查匹配结果缓存，避免重复比较
-			if cachedMatch, exists := ctx.Engine.iconCache.GetMatchResult(iconURL, expectedHash); exists {
-				logger.Debugf("icon()匹配缓存命中: %s (%s) -> %v", iconURL, expectedHash, cachedMatch)
-				return cachedMatch, true
-			}
-
-			// 使用Engine的缓存机制获取图标哈希值
-			actualHash, err := ctx.Engine.getIconHash(iconURL, ctx.HTTPClient)
-			if err != nil {
-				logger.Debugf("获取图标失败: %s, 错误: %v", iconURL, err)
-				return false, false
-			}
-
-			// 比较哈希值
-			match := actualHash == expectedHash
-			ctx.Engine.iconCache.SetMatchResult(iconURL, expectedHash, match)
-			logger.Debugf("icon()匹配: %s -> %v", iconURL, match)
-			return match, true
+			// 委托给Engine处理所有缓存、请求和匹配逻辑
+			return ctx.Engine.CheckIconMatch(iconURL, expectedHash, ctx.HTTPClient)
 		}
 	}
 	return false, false

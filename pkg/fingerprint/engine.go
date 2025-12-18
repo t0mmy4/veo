@@ -28,6 +28,19 @@ type ProbeResult struct {
 func NewEngine(config *EngineConfig) *Engine {
 	if config == nil {
 		config = getDefaultConfig()
+	} else {
+		// 补充默认配置
+		if config.StaticExtensions == nil {
+			config.StaticExtensions = append([]string(nil), StaticFileExtensions...)
+		}
+		if config.StaticContentTypes == nil {
+			config.StaticContentTypes = append([]string(nil), StaticContentTypes...)
+		}
+		// 确保默认开启过滤和Snippet，除非显式关闭（这取决于调用者如何构造Config）
+		// 如果Config是外部构造的零值，bool默认为false。
+		// 这里假设调用者负责设置需要的bool值，或者使用辅助函数构造Config。
+		// 为了安全起见，我们在getDefaultConfig中设置默认值，
+		// 对于传入的Config，我们保留原样，假设调用者知道自己在做什么。
 	}
 
 	engine := &Engine{
@@ -35,87 +48,18 @@ func NewEngine(config *EngineConfig) *Engine {
 		ruleManager: NewRuleManager(), // 初始化规则管理器
 		matches:     make([]*FingerprintMatch, 0),
 		dslParser:   NewDSLParser(),
-		iconCache: NewIconCache(), // 使用组件初始化
+		iconCache:   NewIconCache(), // 使用组件初始化
 		stats: &Statistics{
 			StartTime: time.Now(),
 		},
-		staticExtensions:         append([]string(nil), StaticFileExtensions...),
-		staticContentTypes:       append([]string(nil), StaticContentTypes...),
-		staticFileFilterEnabled:  true,
-		contentTypeFilterEnabled: true,
-		showSnippet:              true, // 默认启用snippet捕获
-		outputFormatter:          nil,  // 默认不输出,由外部注入
 	}
 
 	return engine
 }
 
-
-// SetStaticContentTypes 设置自定义静态Content-Type列表
-func (e *Engine) SetStaticContentTypes(contentTypes []string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if contentTypes == nil {
-		e.staticContentTypes = append([]string(nil), StaticContentTypes...)
-	} else {
-		e.staticContentTypes = cloneStringSlice(contentTypes)
-	}
-}
-
-// SetStaticFileExtensions 设置自定义静态文件扩展名列表
-func (e *Engine) SetStaticFileExtensions(extensions []string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if extensions == nil {
-		e.staticExtensions = append([]string(nil), StaticFileExtensions...)
-	} else {
-		e.staticExtensions = cloneStringSlice(extensions)
-	}
-}
-
-// EnableSnippet 控制是否捕获指纹匹配片段(用于报告)
-func (e *Engine) EnableSnippet(enabled bool) {
-	e.mu.Lock()
-	e.showSnippet = enabled
-	e.mu.Unlock()
-}
-
-
-// IsSnippetEnabled 返回是否启用指纹匹配片段捕获
-func (e *Engine) IsSnippetEnabled() bool {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.showSnippet
-}
-
-// SetOutputFormatter 设置输出格式化器
-func (e *Engine) SetOutputFormatter(formatter OutputFormatter) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.outputFormatter = formatter
-}
-
 // GetOutputFormatter 获取输出格式化器
 func (e *Engine) GetOutputFormatter() OutputFormatter {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.outputFormatter
-}
-
-// SetStaticFileFilterEnabled 控制是否启用静态文件过滤
-func (e *Engine) SetStaticFileFilterEnabled(enabled bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.staticFileFilterEnabled = enabled
-}
-
-// SetContentTypeFilterEnabled 控制是否启用Content-Type过滤
-func (e *Engine) SetContentTypeFilterEnabled(enabled bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.contentTypeFilterEnabled = enabled
+	return e.config.OutputFormatter
 }
 
 // LoadRules 加载指纹识别规则（支持单文件或目录）
@@ -137,6 +81,7 @@ func (e *Engine) AnalyzeResponse(response *HTTPResponse) []*FingerprintMatch {
 func (e *Engine) AnalyzeResponseWithClient(response *HTTPResponse, httpClient httpclient.HTTPClientInterface) []*FingerprintMatch {
 	return e.analyzeResponseInternal(response, httpClient, false)
 }
+
 
 // AnalyzeResponseWithClientSilent 分析响应包并进行指纹识别（静默版本，不自动输出结果）
 // 专用于404页面等需要自定义输出格式的场景
@@ -202,18 +147,16 @@ func (e *Engine) analyzeResponseInternal(response *HTTPResponse, httpClient http
 		e.mu.Unlock()
 
 		// 输出逻辑
-		if !silent {
-			if e.outputFormatter != nil {
-				e.outputFormatter.FormatMatch(matches, response)
-			}
+		if !silent && e.config.OutputFormatter != nil {
+			e.config.OutputFormatter.FormatMatch(matches, response)
 		} else {
 			// [关键] 静默模式：不调用 outputFingerprintMatches，由调用方负责输出
 			logger.Debugf("静默模式匹配完成，匹配数量: %d，跳过自动输出", len(matches))
 		}
 	} else {
 		// No match output (only if not silent)
-		if !silent && e.outputFormatter != nil {
-			e.outputFormatter.FormatNoMatch(response)
+		if !silent && e.config.OutputFormatter != nil {
+			e.config.OutputFormatter.FormatNoMatch(response)
 		}
 	}
 
@@ -229,8 +172,8 @@ func (e *Engine) analyzeResponseInternal(response *HTTPResponse, httpClient http
 				
 				if len(rMatches) > 0 {
 					// 如果主调用不是 silent，则手动输出重定向结果
-					if !silent && e.outputFormatter != nil {
-						e.outputFormatter.FormatMatch(rMatches, redirected)
+					if !silent && e.config.OutputFormatter != nil {
+						e.config.OutputFormatter.FormatMatch(rMatches, redirected)
 					}
 					matches = append(matches, rMatches...)
 				}
@@ -322,7 +265,7 @@ func (e *Engine) shouldCaptureSnippet(rule *FingerprintRule) bool {
 	if rule == nil {
 		return false
 	}
-	return e.IsSnippetEnabled()
+	return e.config.ShowSnippet
 }
 
 func (e *Engine) extractSnippetForDSL(dsl string, ctx *DSLContext) string {
@@ -405,15 +348,12 @@ func (e *Engine) shouldFilterResponse(response *HTTPResponse) bool {
 
 // isStaticFile 检查URL是否指向静态文件（使用共享工具）
 func (e *Engine) isStaticFile(rawURL string) bool {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	if !e.staticFileFilterEnabled || len(e.staticExtensions) == 0 {
+	if !e.config.StaticFileFilterEnabled || len(e.config.StaticExtensions) == 0 {
 		return false
 	}
 
 	lowerURL := strings.ToLower(rawURL)
-	for _, ext := range e.staticExtensions {
+	for _, ext := range e.config.StaticExtensions {
 		if ext == "" {
 			continue
 		}
@@ -427,16 +367,13 @@ func (e *Engine) isStaticFile(rawURL string) bool {
 
 // isStaticContentType 检查Content-Type是否为静态类型
 func (e *Engine) isStaticContentType(contentType string) bool {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	if !e.contentTypeFilterEnabled || len(e.staticContentTypes) == 0 {
+	if !e.config.ContentTypeFilterEnabled || len(e.config.StaticContentTypes) == 0 {
 		return false
 	}
 
 	contentType = strings.ToLower(contentType)
 
-	for _, staticType := range e.staticContentTypes {
+	for _, staticType := range e.config.StaticContentTypes {
 		if staticType == "" {
 			continue
 		}
@@ -448,13 +385,9 @@ func (e *Engine) isStaticContentType(contentType string) bool {
 	return false
 }
 
-func cloneStringSlice(values []string) []string {
-	if values == nil {
-		return nil
-	}
-	clone := make([]string, len(values))
-	copy(clone, values)
-	return clone
+// GetConfig 获取引擎配置（可修改，非并发安全）
+func (e *Engine) GetConfig() *EngineConfig {
+	return e.config
 }
 
 // GetMatches 获取所有匹配结果
@@ -508,9 +441,9 @@ func getDefaultConfig() *EngineConfig {
 
 // 缓存和去重相关方法
 
-// getIconHash 获取图标哈希值（委托给IconCache组件）
-func (e *Engine) getIconHash(iconURL string, httpClient httpclient.HTTPClientInterface) (string, error) {
-	return e.iconCache.GetHash(iconURL, httpClient)
+// CheckIconMatch 检查图标哈希是否匹配（委托给IconCache组件）
+func (e *Engine) CheckIconMatch(iconURL string, expectedHash string, httpClient httpclient.HTTPClientInterface) (bool, bool) {
+	return e.iconCache.CheckMatch(iconURL, expectedHash, httpClient)
 }
 
 // 主动探测相关方法
@@ -634,11 +567,6 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 					// 匹配规则
 					dslCtx := e.createDSLContextWithClient(resp, httpClient, baseURL)
 					if match := e.matchRule(tk.rule, dslCtx); match != nil {
-						// 使用OutputFormatter输出
-						if e.outputFormatter != nil {
-							e.outputFormatter.FormatMatch([]*FingerprintMatch{match}, resp, "主动探测")
-						}
-						
 						resultsMu.Lock()
 						results = append(results, &ProbeResult{
 							Response: resp,
@@ -687,10 +615,6 @@ func (e *Engine) Execute404Probing(ctx context.Context, baseURL string, httpClie
 	// 全量匹配
 	matches := e.match404PageFingerprints(resp, httpClient, baseURL)
 	if len(matches) > 0 {
-		// 使用OutputFormatter输出
-		if e.outputFormatter != nil {
-			e.outputFormatter.FormatMatch(matches, resp, "404探测")
-		}
 		return &ProbeResult{
 			Response: resp,
 			Matches:  matches,

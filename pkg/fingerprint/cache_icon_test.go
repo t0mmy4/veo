@@ -41,7 +41,7 @@ func TestIconCache(t *testing.T) {
 	}
 
 	// Test 3: Match Cache
-	if matched, exists := c.GetMatchResult("http://example.com/icon.ico", expectedHash); exists {
+	if _, exists := c.GetMatchResult("http://example.com/icon.ico", expectedHash); exists {
 		t.Error("Match cache should be empty")
 	}
 	

@@ -10,13 +10,13 @@ import (
 // JSONOutputFormatter JSON输出格式化器
 // 以JSON格式输出指纹识别结果，便于机器解析
 type JSONOutputFormatter struct {
-	deduplicator Deduplicator
+	deduplicator *Deduplicator
 }
 
 // NewJSONOutputFormatter 创建JSON输出格式化器
 func NewJSONOutputFormatter() *JSONOutputFormatter {
 	return &JSONOutputFormatter{
-		deduplicator: NewInMemoryDeduplicator(),
+		deduplicator: NewDeduplicator(),
 	}
 }
 

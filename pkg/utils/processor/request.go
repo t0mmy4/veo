@@ -1,7 +1,6 @@
 package processor
 
 import (
-	"context"
 	"fmt"
 	"math/rand"
 	"regexp"
@@ -169,8 +168,8 @@ func (rp *RequestProcessor) ProcessURLs(urls []string) []*interfaces.HTTPRespons
 	// 创建进度完成信号通道
 	progressDone := make(chan struct{})
 
-	// 并发优化：使用Worker Pool处理URL
-	rp.processURLsWithWorkerPool(urls, &responses, &responsesMu, stats)
+	// 并发优化：使用 semaphore 模式直接处理
+	rp.processURLsConcurrent(urls, &responses, &responsesMu, stats, nil)
 
 	// 完成处理
 	rp.finalizeProcessing(progressDone, stats, len(responses))
@@ -178,32 +177,10 @@ func (rp *RequestProcessor) ProcessURLs(urls []string) []*interfaces.HTTPRespons
 	return responses
 }
 
-// URL处理相关方法
-
 // processConcurrentURLs 并发处理URL列表（真正的并发控制）
+// Deprecated: Internal use only, merged into processURLsConcurrent
 func (rp *RequestProcessor) processConcurrentURLs(urls []string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats) {
-	var wg sync.WaitGroup
-
-	// 使用带缓冲的channel控制并发数
-	sem := make(chan struct{}, rp.config.MaxConcurrent)
-
-	for i, url := range urls {
-		wg.Add(1)
-
-		go func(index int, targetURL string) {
-			// 获取信号量（这里会阻塞，直到有可用的槽位）
-			sem <- struct{}{}
-
-			defer func() {
-				<-sem // 释放信号量
-				wg.Done()
-			}()
-
-			rp.processURLWithStats(targetURL, responses, responsesMu, stats)
-		}(i, url)
-	}
-
-	wg.Wait()
+	rp.processURLsConcurrent(urls, responses, responsesMu, stats, nil)
 }
 
 // ProcessURLsWithCallback 处理URL列表，并对每个响应执行回调
@@ -227,8 +204,8 @@ func (rp *RequestProcessor) ProcessURLsWithCallback(urls []string, callback func
 	// 创建进度完成信号通道
 	progressDone := make(chan struct{})
 
-	// 使用Worker Pool处理URL
-	rp.processURLsWithWorkerPoolAndCallback(urls, &responses, &responsesMu, stats, callback)
+	// 使用 semaphore 模式直接处理
+	rp.processURLsConcurrent(urls, &responses, &responsesMu, stats, callback)
 
 	// 完成处理
 	rp.finalizeProcessing(progressDone, stats, len(responses))
@@ -236,204 +213,40 @@ func (rp *RequestProcessor) ProcessURLsWithCallback(urls []string, callback func
 	return responses
 }
 
-// processURLsWithWorkerPoolAndCallback 使用Worker Pool处理URL列表，支持回调
-func (rp *RequestProcessor) processURLsWithWorkerPoolAndCallback(urls []string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats, callback func(*interfaces.HTTPResponse)) {
-	// 创建并启动工作池
-	workerPool := rp.createAndStartWorkerPool()
-	defer workerPool.Stop()
+// processURLsConcurrent 使用信号量并发处理URL列表
+func (rp *RequestProcessor) processURLsConcurrent(urls []string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats, callback func(*interfaces.HTTPResponse)) {
+	var wg sync.WaitGroup
+	// 使用带缓冲的channel控制并发数
+	sem := make(chan struct{}, rp.config.MaxConcurrent)
 
-	// 提交任务并收集结果
-	taskSubmissionDone := rp.submitTasksAsync(workerPool, urls)
-	rp.collectResultsWithCallback(workerPool, urls, responses, responsesMu, stats, taskSubmissionDone, callback)
-}
+	for i, url := range urls {
+		wg.Add(1)
+		go func(index int, targetURL string) {
+			defer wg.Done()
+			
+			// 获取信号量（阻塞直到有空位）
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-// collectResultsWithCallback 收集处理结果并执行回调
-func (rp *RequestProcessor) collectResultsWithCallback(workerPool *WorkerPool, urls []string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats, taskSubmissionDone <-chan struct{}, callback func(*interfaces.HTTPResponse)) {
-	processedCount := 0
-	timeoutDuration := 30 * time.Second
-
-	// 创建结果收集的context，支持提前取消
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutDuration+10*time.Second)
-	defer cancel()
-
-	for processedCount < len(urls) {
-		select {
-		case result := <-workerPool.GetResult():
-			rp.processWorkerResult(result, responses, responsesMu, stats)
-			if callback != nil && result.Response != nil {
-				callback(result.Response)
-			}
-			processedCount++
-
-		case <-time.After(timeoutDuration):
-			logger.Warnf("Worker Pool处理超时，尝试收集剩余结果...")
-			rp.collectRemainingResultsWithCallback(workerPool, len(urls)-processedCount, responses, responsesMu, stats, callback)
-			return
-
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-// collectRemainingResultsWithCallback 收集剩余结果并执行回调
-func (rp *RequestProcessor) collectRemainingResultsWithCallback(workerPool *WorkerPool, maxResults int, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats, callback func(*interfaces.HTTPResponse)) {
-	timeout := 100 * time.Millisecond
-	for i := 0; i < maxResults && i < 50; i++ {
-		select {
-		case result := <-workerPool.GetResult():
-			rp.processWorkerResult(result, responses, responsesMu, stats)
-			if callback != nil && result.Response != nil {
-				callback(result.Response)
-			}
-		case <-time.After(timeout):
-			if timeout < 500*time.Millisecond {
-				timeout += 50 * time.Millisecond
-			}
-			break
-		}
-	}
-}
-
-// processURLsWithWorkerPool 使用Worker Pool处理URL列表
-func (rp *RequestProcessor) processURLsWithWorkerPool(urls []string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats) {
-	rp.processURLsWithWorkerPoolAndCallback(urls, responses, responsesMu, stats, nil)
-}
-
-// createAndStartWorkerPool 创建并启动工作池
-func (rp *RequestProcessor) createAndStartWorkerPool() *WorkerPool {
-	workerPool := NewWorkerPool(rp.config.MaxConcurrent, rp)
-	workerPool.Start()
-	return workerPool
-}
-
-// submitTasksAsync 异步提交所有任务
-func (rp *RequestProcessor) submitTasksAsync(workerPool *WorkerPool, urls []string) <-chan struct{} {
-	taskSubmissionDone := make(chan struct{})
-
-	go func() {
-		defer close(taskSubmissionDone)
-		for i, url := range urls {
-			// 检查Worker Pool是否已停止
-			if rp.shouldStopTaskSubmission(workerPool) {
-				logger.Debugf("Worker Pool已停止，停止提交新任务")
-				return
+			// 应用请求延迟
+			if rp.config.Delay > 0 {
+				time.Sleep(rp.config.Delay)
 			}
 
-			task := WorkerTask{
-				URL:       url,
-				Index:     i,
-				TotalURLs: len(urls),
+			// 处理URL
+			response := rp.processURL(targetURL)
+
+			// 更新统计和收集响应
+			rp.updateProcessingStats(response, targetURL, responses, responsesMu, stats)
+
+			// 执行回调
+			if callback != nil && response != nil {
+				callback(response)
 			}
-			workerPool.SubmitTask(task)
-		}
-	}()
-
-	return taskSubmissionDone
-}
-
-// shouldStopTaskSubmission 检查是否应该停止任务提交
-func (rp *RequestProcessor) shouldStopTaskSubmission(workerPool *WorkerPool) bool {
-	select {
-	case <-workerPool.ctx.Done():
-		return true
-	default:
-		return false
-	}
-}
-
-// collectResults 收集处理结果（修复：完善超时和取消机制）
-func (rp *RequestProcessor) collectResults(workerPool *WorkerPool, urls []string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats, taskSubmissionDone <-chan struct{}) {
-	processedCount := 0
-	timeoutDuration := 30 * time.Second
-
-	// 创建结果收集的context，支持提前取消
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutDuration+10*time.Second)
-	defer cancel()
-
-	for processedCount < len(urls) {
-		select {
-		case result := <-workerPool.GetResult():
-			rp.processWorkerResult(result, responses, responsesMu, stats)
-			processedCount++
-
-		case <-time.After(timeoutDuration):
-			logger.Warnf("Worker Pool处理超时，尝试收集剩余结果...")
-
-			// 修复：尝试收集剩余结果，避免丢失数据
-			remainingResults := rp.collectRemainingResults(workerPool, len(urls)-processedCount, responses, responsesMu, stats)
-			processedCount += remainingResults
-
-			logger.Warnf("超时处理完成，最终处理: %d/%d", processedCount, len(urls))
-
-			// 等待任务提交完成，但设置超时避免永久阻塞
-			select {
-			case <-taskSubmissionDone:
-			case <-time.After(5 * time.Second):
-				logger.Warnf("等待任务提交完成超时，强制退出")
-			}
-			return
-
-		case <-ctx.Done():
-			logger.Warnf("结果收集被取消，已处理: %d/%d", processedCount, len(urls))
-			return
-		}
+		}(i, url)
 	}
 
-	// 确保任务提交完成，但设置超时避免永久阻塞
-	select {
-	case <-taskSubmissionDone:
-	case <-time.After(5 * time.Second):
-		logger.Warnf("等待任务提交完成超时")
-	}
-}
-
-// collectRemainingResults 收集剩余结果（新增：避免结果丢失）
-func (rp *RequestProcessor) collectRemainingResults(workerPool *WorkerPool, maxResults int, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats) int {
-	collected := 0
-	timeout := 100 * time.Millisecond
-
-	for i := 0; i < maxResults && i < 50; i++ { // 最多尝试收集50个剩余结果
-		select {
-		case result := <-workerPool.GetResult():
-			rp.processWorkerResult(result, responses, responsesMu, stats)
-			collected++
-		case <-time.After(timeout):
-			// 逐渐增加超时时间，但有上限
-			if timeout < 500*time.Millisecond {
-				timeout += 50 * time.Millisecond
-			}
-			break
-		}
-	}
-
-	logger.Debugf("收集到 %d 个剩余结果", collected)
-	return collected
-}
-
-// processWorkerResult 处理单个工作结果
-func (rp *RequestProcessor) processWorkerResult(result WorkerResult, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats) {
-	// 应用请求延迟
-	if rp.config.Delay > 0 {
-		time.Sleep(rp.config.Delay)
-	}
-
-	// 更新统计和收集响应
-	rp.updateProcessingStats(result.Response, result.URL, responses, responsesMu, stats)
-}
-
-// processURLWithStats 处理单个URL并更新统计
-func (rp *RequestProcessor) processURLWithStats(targetURL string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats) {
-	// 请求延迟
-	if rp.config.Delay > 0 {
-		time.Sleep(rp.config.Delay)
-	}
-
-	// 处理URL（并发控制已在上层处理）
-	response := rp.processURL(targetURL)
-
-	// 更新统计和收集响应
-	rp.updateProcessingStats(response, targetURL, responses, responsesMu, stats)
+	wg.Wait()
 }
 
 // requestFetcher 适配器，用于将RequestProcessor适配为redirect.HTTPFetcherFull接口
@@ -484,12 +297,16 @@ func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 
 		// 改进的重试延迟：指数退避 + 随机抖动
 		if attempt < rp.config.MaxRetries {
-			baseDelay := time.Duration(1<<uint(attempt)) * time.Second  // 指数退避: 1s, 2s, 4s, 8s
-			jitter := time.Duration(rand.Intn(1000)) * time.Millisecond // 随机抖动: 0-1s
-			delay := baseDelay + jitter
-			if delay > 10*time.Second {
-				delay = 10 * time.Second // 最大延迟10秒
+			// 优化：目录扫描需要高性能，减少重试等待时间
+			// 原来是 1s, 2s, 4s... 对于扫描太慢了
+			// 改为：100ms, 200ms, 400ms...
+			baseDelay := time.Duration(100*(1<<uint(attempt))) * time.Millisecond
+			if baseDelay > 2*time.Second {
+				baseDelay = 2 * time.Second
 			}
+			
+			jitter := time.Duration(rand.Intn(100)) * time.Millisecond // 减少抖动范围
+			delay := baseDelay + jitter
 			logger.Debugf("重试延迟: %v (基础: %v, 抖动: %v)", delay, baseDelay, jitter)
 			time.Sleep(delay)
 		}
@@ -756,4 +573,28 @@ func (rp *RequestProcessor) getRandomUserAgent() string {
 // GetUserAgent 返回当前配置下的User-Agent（供外部HTTP客户端复用）
 func (rp *RequestProcessor) GetUserAgent() string {
 	return rp.getRandomUserAgent()
+}
+
+// MakeRequest 实现 httpclient.HTTPClientInterface 接口
+func (rp *RequestProcessor) MakeRequest(rawURL string) (string, int, error) {
+	resp, err := rp.DoRequest(rawURL, nil)
+	if err != nil {
+		return "", 0, err
+	}
+	if resp == nil {
+		return "", 0, fmt.Errorf("empty response")
+	}
+	return resp.ResponseBody, resp.StatusCode, nil
+}
+
+// MakeRequestWithHeaders 实现 httpclient.HeaderAwareClient 接口
+func (rp *RequestProcessor) MakeRequestWithHeaders(rawURL string, headers map[string]string) (string, int, error) {
+	resp, err := rp.DoRequest(rawURL, headers)
+	if err != nil {
+		return "", 0, err
+	}
+	if resp == nil {
+		return "", 0, fmt.Errorf("empty response")
+	}
+	return resp.ResponseBody, resp.StatusCode, nil
 }

@@ -90,8 +90,9 @@ func RunRecursiveScan(
 			newTargets := ExtractNextLevelTargets(results, alreadyScanned)
 
 			// 验证潜在的目录目标
-			// [关键优化] 对不确定的目录进行主动验证，确保递归的有效性
-			validNewTargets := VerifyDirectoryTargets(newTargets, results, dataFetcher)
+			// [规则更新] 不允许发送额外验证请求，直接信任提取结果
+			// validNewTargets := VerifyDirectoryTargets(newTargets, results, dataFetcher)
+			validNewTargets := newTargets
 
 			// 再次去重并加入已扫描集合
 			var finalTargets []string

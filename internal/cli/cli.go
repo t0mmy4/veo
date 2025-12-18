@@ -947,7 +947,7 @@ func startApplication(args *CLIArgs) error {
 		// 为被动代理模式创建并注入OutputFormatter
 		engine := app.fingerprintAddon.GetEngine()
 		if engine != nil {
-			engine.EnableSnippet(true) // 启用snippet捕获
+			engine.GetConfig().ShowSnippet = true // 启用snippet捕获
 			
 			snippetEnabled := args.VeryVerbose
 			ruleEnabled := args.Verbose || args.VeryVerbose
@@ -963,7 +963,7 @@ func startApplication(args *CLIArgs) error {
 					snippetEnabled,  // consoleSnippetEnabled
 				)
 			}
-			engine.SetOutputFormatter(outputFormatter)
+			engine.GetConfig().OutputFormatter = outputFormatter
 			logger.Debugf("被动代理模式 OutputFormatter 已注入: %T", outputFormatter)
 		}
 

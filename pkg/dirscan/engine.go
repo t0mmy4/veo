@@ -109,6 +109,12 @@ func (e *Engine) PerformScanWithFilter(collectorInstance interfaces.URLCollector
 		responseFilter = CreateResponseFilterFromExternal()
 	}
 
+	// [修复] 注入 HTTP 客户端以支持 icon() 等主动探测指纹
+	if responseFilter != nil {
+		processor := e.getOrCreateRequestProcessor()
+		responseFilter.SetHTTPClient(processor)
+	}
+
 	// 准备累积结果和锁
 	finalFilterResult := &interfaces.FilterResult{
 		ValidPages:           make([]interfaces.HTTPResponse, 0),
@@ -162,7 +168,7 @@ func (e *Engine) PerformScanWithFilter(collectorInstance interfaces.URLCollector
 	atomic.StoreInt64(&e.stats.TotalRequests, int64(len(responses)))
 
 	// 补充：收集无效页面哈希统计 (从过滤器中获取最终状态)
-	finalFilterResult.InvalidPageHashes = responseFilter.GetHashFilter().GetInvalidPageHashes()
+	finalFilterResult.InvalidPageHashes = responseFilter.GetInvalidPageHashes()
 	// 注意：这里我们假设过滤器是 HashFilter，如果接口支持的话
 	// 实际上 ResponseFilter 封装了这些细节，但 GetHashFilter 方法在 ResponseFilter 中有导出
 
@@ -322,6 +328,12 @@ func (e *Engine) applyFilter(responses []*interfaces.HTTPResponse, externalFilte
 		responseFilter = CreateResponseFilterFromExternal()
 	}
 
+	// [修复] 注入 HTTP 客户端以支持 icon() 等主动探测指纹
+	if responseFilter != nil {
+		processor := e.getOrCreateRequestProcessor()
+		responseFilter.SetHTTPClient(processor)
+	}
+
 	// 转换为过滤器可处理的格式
 	filterResponses := e.convertToFilterResponses(responses)
 
@@ -338,15 +350,16 @@ func (e *Engine) applyFilter(responses []*interfaces.HTTPResponse, externalFilte
 func (e *Engine) convertToFilterResponses(httpResponses []*interfaces.HTTPResponse) []interfaces.HTTPResponse {
 	filterResponses := make([]interfaces.HTTPResponse, len(httpResponses))
 	for i, resp := range httpResponses {
-		// 内存优化：只复制过滤器真正需要的4个核心字段
-		// 分析过滤器实现发现只需要：URL、StatusCode、ContentLength、ContentType、Title、Body
+		// 内存优化：只复制过滤器真正需要的核心字段
+		// [修复] 必须包含 ResponseHeaders，否则 header() 指纹规则和解压缩逻辑会失效
 		filterResponses[i] = interfaces.HTTPResponse{
-			URL:           resp.URL,                   // 结果展示需要
-			StatusCode:    resp.StatusCode,            // 状态码过滤器使用
-			ContentLength: resp.ContentLength,         // 哈希过滤器容错计算使用
-			ContentType:   resp.ContentType,           // Content-Type过滤器使用
-			Title:         resp.Title,                 // 哈希过滤器生成页面哈希使用
-			Body:          e.getFilterBody(resp.Body), // 哈希计算使用（已截断）
+			URL:             resp.URL,                   // 结果展示需要
+			StatusCode:      resp.StatusCode,            // 状态码过滤器使用
+			ContentLength:   resp.ContentLength,         // 哈希过滤器容错计算使用
+			ContentType:     resp.ContentType,           // Content-Type过滤器使用
+			Title:           resp.Title,                 // 哈希过滤器生成页面哈希使用
+			Body:            e.getFilterBody(resp.Body), // 哈希计算使用（已截断）
+			ResponseHeaders: resp.ResponseHeaders,       // 指纹识别 header() 规则需要
 			// 内存优化：其他字段使用零值，大幅减少内存占用
 			// Method、Server、IsDirectory、Length、Duration、Depth等字段在过滤器中未使用
 		}

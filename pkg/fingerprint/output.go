@@ -37,7 +37,7 @@ type ConsoleOutputFormatter struct {
 	consoleSnippetEnabled bool // 控制是否在控制台输出指纹匹配片段
 
 	// 去重组件
-	deduplicator Deduplicator // 结果去重器
+	deduplicator *Deduplicator // 结果去重器
 }
 
 // NewConsoleOutputFormatter 创建控制台输出格式化器
@@ -47,7 +47,7 @@ func NewConsoleOutputFormatter(logMatches, showSnippet, showRules, consoleSnippe
 		showSnippet:           showSnippet,
 		showRules:             showRules,
 		consoleSnippetEnabled: consoleSnippet,
-		deduplicator:          NewInMemoryDeduplicator(),
+		deduplicator:          NewDeduplicator(),
 	}
 }
 

@@ -198,6 +198,12 @@ func (da *DirscanAddon) TriggerScan() (*ScanResult, error) {
 		} else {
 			recursiveFilter = CreateResponseFilterFromExternal()
 		}
+		
+		// [修复] 必须为递归过滤器注入 HTTP 客户端，否则递归过程中的指纹识别会缺少客户端
+		if recursiveFilter != nil {
+			processor := da.engine.getOrCreateRequestProcessor()
+			recursiveFilter.SetHTTPClient(processor)
+		}
 	}
 
 	// 执行递归扫描

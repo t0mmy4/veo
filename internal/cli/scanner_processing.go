@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strings"
@@ -40,6 +41,10 @@ func (sc *ScanController) applyFilterForTarget(responses []interfaces.HTTPRespon
 			if sc.fingerprintEngine != nil {
 				responseFilter.SetFingerprintEngine(sc.fingerprintEngine)
 				logger.Debugf("目录扫描模块已启用指纹二次识别功能，引擎类型: %T", sc.fingerprintEngine)
+				
+				// [修复] 注入 HTTP 客户端以支持 icon() 等主动探测功能
+				// 这里使用的是扫描控制器的全局 RequestProcessor
+				responseFilter.SetHTTPClient(sc.requestProcessor)
 			} else {
 				logger.Debugf("指纹引擎为nil，未启用二次识别")
 			}
@@ -80,7 +85,7 @@ func (sc *ScanController) applyFilterForTarget(responses []interfaces.HTTPRespon
 }
 
 // processTargetResponses 处理目标响应：类型转换、应用过滤器、收集统计
-func (sc *ScanController) processTargetResponses(responses []*interfaces.HTTPResponse, target string, filter *dirscan.ResponseFilter) ([]interfaces.HTTPResponse, error) {
+func (sc *ScanController) processTargetResponses(ctx context.Context, responses []*interfaces.HTTPResponse, target string, filter *dirscan.ResponseFilter) ([]interfaces.HTTPResponse, error) {
 	// 转换为接口类型
 	var targetResponses []interfaces.HTTPResponse
 	for _, resp := range responses {

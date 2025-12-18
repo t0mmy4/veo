@@ -1,6 +1,7 @@
 package dirscan
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"veo/pkg/utils/interfaces"
@@ -42,7 +43,7 @@ func TestRunRecursiveScan(t *testing.T) {
 	initialTargets := []string{"http://example.com/admin/"}
 	maxDepth := 2 // 测试两层递归
 
-	results, err := RunRecursiveScan(initialTargets, maxDepth, mockLayerScanner, mockFetcher, nil)
+	results, err := RunRecursiveScan(context.Background(), initialTargets, maxDepth, mockLayerScanner, mockFetcher, nil)
 	if err != nil {
 		t.Fatalf("RunRecursiveScan failed: %v", err)
 	}
