@@ -27,7 +27,7 @@ func (e *Engine) TriggerActiveProbing(baseURL string, httpClient httpclient.HTTP
 		defer cancel()
 		// 执行主动Path探测
 		_, _ = e.ExecuteActiveProbing(ctx, baseURL, httpClient)
-		
+
 		// 执行404探测
 		_, _ = e.Execute404Probing(ctx, baseURL, httpClient)
 	}()
@@ -100,9 +100,9 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 					if !ok {
 						return
 					}
-					
+
 					probeURL := joinURLPath(baseURL, tk.path)
-					
+
 					// 构造Headers
 					var headers map[string]string
 					if tk.rule.HasHeaders() {
@@ -160,14 +160,14 @@ func (e *Engine) ExecuteIconProbing(ctx context.Context, baseURL string, httpCli
 	if err != nil {
 		return nil, fmt.Errorf("URL解析失败: %v", err)
 	}
-	
+
 	// 构造一个虚拟的HTTPResponse，用于传递BaseURL等信息
 	resp := &HTTPResponse{
 		URL:             baseURL,
 		Method:          "GET",
-		StatusCode:      200, 
+		StatusCode:      200,
 		ResponseHeaders: make(map[string][]string),
-		Body:            "", 
+		Body:            "",
 		Title:           "",
 	}
 

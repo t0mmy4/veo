@@ -1,3 +1,5 @@
+//go:build passive
+
 package cli
 
 import (
@@ -69,4 +71,3 @@ func Execute() {
 		}
 	}
 }
-

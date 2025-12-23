@@ -1,3 +1,5 @@
+//go:build passive
+
 package dirscan
 
 import (
@@ -18,8 +20,8 @@ type Collector struct {
 	mu                 sync.RWMutex    // 读写锁
 	collectionEnabled  bool            // 收集功能是否启用
 	collectionPaused   bool            // 收集是否暂停
-	
-	cleaner            *URLCleaner     // URL清理器
+
+	cleaner *URLCleaner // URL清理器
 }
 
 // NewCollector 创建新的Collector实例
@@ -122,7 +124,9 @@ func (c *Collector) GetURLMap() map[string]int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	result := make(map[string]int, len(c.urlMap))
-	for k, v := range c.urlMap { result[k] = v }
+	for k, v := range c.urlMap {
+		result[k] = v
+	}
 	return result
 }
 
@@ -141,7 +145,7 @@ func (c *Collector) SetIncludeStatusCodes(codes []int) {
 }
 
 func (c *Collector) SetStaticExtensions(exts []string) { c.cleaner.SetStaticExtensions(exts) }
-func (c *Collector) SetStaticPaths(paths []string) { c.cleaner.SetStaticPaths(paths) }
+func (c *Collector) SetStaticPaths(paths []string)     { c.cleaner.SetStaticPaths(paths) }
 
 func (c *Collector) SetAllowedHosts(hosts []string) {
 	c.mu.Lock()
@@ -149,23 +153,35 @@ func (c *Collector) SetAllowedHosts(hosts []string) {
 	c.allowedHosts = hosts
 }
 
-func (c *Collector) EnableCollection() { 
-	c.mu.Lock(); defer c.mu.Unlock(); c.collectionEnabled = true 
+func (c *Collector) EnableCollection() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.collectionEnabled = true
 }
-func (c *Collector) DisableCollection() { 
-	c.mu.Lock(); defer c.mu.Unlock(); c.collectionEnabled = false 
+func (c *Collector) DisableCollection() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.collectionEnabled = false
 }
 func (c *Collector) IsCollectionEnabled() bool {
-	c.mu.RLock(); defer c.mu.RUnlock(); return c.collectionEnabled
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.collectionEnabled
 }
-func (c *Collector) PauseCollection() { 
-	c.mu.Lock(); defer c.mu.Unlock(); c.collectionPaused = true 
+func (c *Collector) PauseCollection() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.collectionPaused = true
 }
-func (c *Collector) ResumeCollection() { 
-	c.mu.Lock(); defer c.mu.Unlock(); c.collectionPaused = false 
+func (c *Collector) ResumeCollection() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.collectionPaused = false
 }
 func (c *Collector) IsCollectionPaused() bool {
-	c.mu.RLock(); defer c.mu.RUnlock(); return c.collectionPaused
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.collectionPaused
 }
 
 // isHostAllowed 简单主机检查

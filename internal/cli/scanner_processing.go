@@ -39,7 +39,7 @@ func (sc *ScanController) applyFilterForTarget(responses []*interfaces.HTTPRespo
 			if sc.fingerprintEngine != nil {
 				responseFilter.SetFingerprintEngine(sc.fingerprintEngine)
 				logger.Debugf("目录扫描模块已启用指纹二次识别功能，引擎类型: %T", sc.fingerprintEngine)
-				
+
 				// [取消] 二次指纹识别无需主动探测（icon和404）
 				// 仅保留被动页面识别，避免重复发包
 				// responseFilter.SetHTTPClient(sc.requestProcessor)
@@ -109,34 +109,6 @@ func (sc *ScanController) processTargetResponses(ctx context.Context, responses 
 	return filterResult.ValidPages, nil
 }
 
-
-func (sc *ScanController) buildScanParams() map[string]interface{} {
-	params := map[string]interface{}{
-		"threads":                   sc.maxConcurrent,
-		"timeout":                   sc.timeoutSeconds,
-		"retry":                     sc.retryCount,
-		"dir_targets_count":         0,
-		"fingerprint_targets_count": 0,
-		"fingerprint_rules_loaded":  0,
-	}
-
-	if sc.args.HasModule(string(modulepkg.ModuleDirscan)) {
-		params["dir_targets_count"] = len(sc.lastTargets)
-	}
-
-	if sc.args.HasModule(string(modulepkg.ModuleFinger)) {
-		params["fingerprint_targets_count"] = len(sc.lastTargets)
-	}
-
-	if sc.fingerprintEngine != nil {
-		if stats := sc.fingerprintEngine.GetStats(); stats != nil {
-			params["fingerprint_rules_loaded"] = stats.RulesLoaded
-		}
-	}
-
-	return params
-}
-
 func (sc *ScanController) generateReport(filterResult *interfaces.FilterResult) error {
 	reportPath := strings.TrimSpace(sc.reportPath)
 	if reportPath == "" {
@@ -149,7 +121,6 @@ func (sc *ScanController) generateReport(filterResult *interfaces.FilterResult) 
 		Modules:                sc.args.Modules,
 		OutputPath:             reportPath,
 		ShowFingerprintSnippet: sc.showFingerprintSnippet,
-		ScanParams:             sc.buildScanParams(),
 	}
 
 	// 准备指纹结果（如果有）
@@ -177,21 +148,17 @@ func (sc *ScanController) generateReport(filterResult *interfaces.FilterResult) 
 
 func (sc *ScanController) generateConsoleJSON(dirPages, fingerprintPages []interfaces.HTTPResponse, filterResult *interfaces.FilterResult) (string, error) {
 	var matches []types.FingerprintMatch
-	var stats *report.FingerprintStats
 	if sc.fingerprintEngine != nil {
 		if raw := sc.fingerprintEngine.GetMatches(); len(raw) > 0 {
 			matches = convertFingerprintMatches(raw, sc.showFingerprintSnippet)
 		}
-		stats = toReporterStats(sc.fingerprintEngine.GetStats())
 	}
 
 	if len(fingerprintPages) == 0 && sc.args.HasModule(string(modulepkg.ModuleFinger)) {
 		fingerprintPages = toValueSlice(filterResult.ValidPages)
 	}
 
-	params := sc.buildScanParams()
-
-	return report.GenerateCombinedJSON(dirPages, fingerprintPages, matches, stats, params)
+	return report.GenerateCombinedJSON(dirPages, fingerprintPages, matches)
 }
 
 func (sc *ScanController) convertToFingerprintResponse(resp *interfaces.HTTPResponse) *fingerprint.HTTPResponse {

@@ -479,7 +479,7 @@ func (p *DSLParser) ExtractSnippet(dsl string, ctx *DSLContext) string {
 		if target == "" || pattern == "" {
 			return ""
 		}
-		
+
 		re, err := p.getCompiledRegex(pattern)
 		if err != nil {
 			return ""

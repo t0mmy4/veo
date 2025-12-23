@@ -25,10 +25,10 @@ func NewEngine(config *EngineConfig) *Engine {
 
 	engine := &Engine{
 		config:      config,
-		ruleManager: NewRuleManager(), 
+		ruleManager: NewRuleManager(),
 		matches:     make([]*FingerprintMatch, 0),
 		dslParser:   NewDSLParser(),
-		iconCache:   NewIconCache(), 
+		iconCache:   NewIconCache(),
 		stats: &Statistics{
 			StartTime: time.Now(),
 		},
@@ -127,7 +127,7 @@ func (e *Engine) analyzeResponseInternal(response *HTTPResponse, httpClient http
 		if fetcher, ok := httpClient.(redirect.HTTPFetcher); ok {
 			if redirected, err := redirect.FollowClientRedirect(response, fetcher); err == nil && redirected != nil {
 				rMatches := e.analyzeResponseInternal(redirected, httpClient, true)
-				
+
 				if len(rMatches) > 0 {
 					if !silent && e.config.OutputFormatter != nil {
 						e.config.OutputFormatter.FormatMatch(rMatches, redirected)
@@ -184,7 +184,7 @@ func (e *Engine) GetRulesCount() int {
 
 // getDefaultConfig 获取默认配置
 func getDefaultConfig() *EngineConfig {
-	maxConcurrency := 20 
+	maxConcurrency := 20
 
 	return &EngineConfig{
 		RulesPath:       "config/fingerprint/",

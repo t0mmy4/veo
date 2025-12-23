@@ -12,10 +12,10 @@ import (
 // IconCache 图标缓存管理组件
 // 负责缓存图标哈希值和匹配结果，避免重复请求和计算
 type IconCache struct {
-	hashCache  map[string]string      // 图标URL -> MD5哈希值 (包括 "FAILED" 状态)
-	matchCache map[string]bool        // 缓存键(URL+Hash) -> 匹配结果
+	hashCache  map[string]string        // 图标URL -> MD5哈希值 (包括 "FAILED" 状态)
+	matchCache map[string]bool          // 缓存键(URL+Hash) -> 匹配结果
 	inflight   map[string]chan struct{} // 正在进行的请求: URL -> 完成通知通道
-	mu         sync.RWMutex           // 读写锁
+	mu         sync.RWMutex             // 读写锁
 }
 
 // NewIconCache 创建新的图标缓存实例
@@ -49,11 +49,11 @@ func (c *IconCache) CheckMatch(iconURL string, expectedHash string, client httpc
 
 	// 3. 比较并缓存结果
 	match := actualHash == expectedHash
-	
+
 	c.mu.Lock()
 	c.matchCache[matchKey] = match
 	c.mu.Unlock()
-	
+
 	logger.Debugf("icon()匹配: %s -> %v", iconURL, match)
 	return match, true
 }

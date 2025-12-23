@@ -103,8 +103,8 @@ type ResponseFilter struct {
 	secondaryHashMap map[string]*interfaces.PageHash
 
 	// 指纹识别引擎
-	fingerprintEngine      interfaces.FingerprintAnalyzer
-	httpClient             httpclient.HTTPClientInterface // 用于指纹识别的主动探测（如icon hash）
+	fingerprintEngine interfaces.FingerprintAnalyzer
+	httpClient        httpclient.HTTPClientInterface // 用于指纹识别的主动探测（如icon hash）
 }
 
 // NewResponseFilter 创建新的响应过滤器
@@ -210,7 +210,7 @@ func (rf *ResponseFilter) FilterResponses(responses []*interfaces.HTTPResponse) 
 	// 获取指纹引擎引用、配置和HTTP客户端，以便在锁外执行
 	engine := rf.fingerprintEngine
 	client := rf.httpClient
-	
+
 	// 释放锁，避免指纹识别期间阻塞其他请求，并防止死锁
 	rf.mu.Unlock()
 
@@ -239,15 +239,17 @@ func (rf *ResponseFilter) checkPrimaryHash(resp *interfaces.HTTPResponse) bool {
 	tolerantLength := rf.calculateTolerantContentLength(resp.ContentLength, rf.config.FilterTolerance)
 	hashSource := fmt.Sprintf("%d|%s|%d", resp.StatusCode, strings.TrimSpace(resp.Title), tolerantLength)
 	hash := fmt.Sprintf("%x", md5.Sum([]byte(hashSource)))
-	
+
 	return rf.updateAndCheckHash(rf.primaryHashMap, hash, resp, rf.config.InvalidPageThreshold)
 }
 
 func (rf *ResponseFilter) checkSecondaryHash(resp *interfaces.HTTPResponse) bool {
 	// 二次筛选使用更严格的容错 (40%)
 	tolerance := rf.config.FilterTolerance * 40 / 100
-	if tolerance < 20 { tolerance = 20 }
-	
+	if tolerance < 20 {
+		tolerance = 20
+	}
+
 	tolerantLength := rf.calculateTolerantContentLength(resp.ContentLength, tolerance)
 	hashSource := fmt.Sprintf("%s|%d|%d", strings.TrimSpace(resp.Title), tolerantLength, resp.StatusCode)
 	hash := fmt.Sprintf("%x", md5.Sum([]byte(hashSource)))
@@ -272,12 +274,16 @@ func (rf *ResponseFilter) updateAndCheckHash(m map[string]*interfaces.PageHash, 
 }
 
 func (rf *ResponseFilter) calculateTolerantContentLength(length int64, tolerance int64) int64 {
-	if tolerance == 0 { return length }
-	
+	if tolerance == 0 {
+		return length
+	}
+
 	var step int64 = tolerance
 	// 动态步长
 	if length < 1000 {
-		if step < 20 { step = 20 }
+		if step < 20 {
+			step = 20
+		}
 	} else if length < 5000 {
 		step = 500
 	} else if length < 10000 {
@@ -285,8 +291,10 @@ func (rf *ResponseFilter) calculateTolerantContentLength(length int64, tolerance
 	} else {
 		step = 2000
 	}
-	if step < tolerance { step = tolerance }
-	
+	if step < tolerance {
+		step = tolerance
+	}
+
 	return ((length + step/2) / step) * step
 }
 
@@ -465,7 +473,6 @@ var (
 	formatContentType   = formatter.FormatContentType
 )
 
-
 var globalFilterConfig atomic.Value
 
 // formatNumber 格式化数字显示（加粗）
@@ -477,8 +484,6 @@ func formatNumber(num int) string {
 func formatPercentage(percentage float64) string {
 	return formatter.FormatPercentage(percentage)
 }
-
-
 
 // performFingerprintRecognition 对单个响应执行指纹识别
 func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPResponse, engine interfaces.FingerprintAnalyzer, client httpclient.HTTPClientInterface) []interfaces.FingerprintMatch {
@@ -518,7 +523,6 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 
 	return convertedMatches
 }
-
 
 // ============================================================================
 // 响应体解压缩辅助方法（用于二次指纹识别）

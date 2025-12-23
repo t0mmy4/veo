@@ -194,7 +194,7 @@ func (sc *ScanController) processSingleTargetFingerprintWithContext(ctx context.
 			}
 		}()
 
-		resultChan <- sc.processSingleTargetFingerprint(target)
+		resultChan <- sc.processSingleTargetFingerprint(ctx, target)
 	}()
 
 	select {
@@ -207,7 +207,10 @@ func (sc *ScanController) processSingleTargetFingerprintWithContext(ctx context.
 }
 
 // processSingleTargetFingerprint 处理单个目标的指纹识别（多目标并发优化）
-func (sc *ScanController) processSingleTargetFingerprint(target string) []interfaces.HTTPResponse {
+func (sc *ScanController) processSingleTargetFingerprint(ctx context.Context, target string) []interfaces.HTTPResponse {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	logger.Debugf("开始处理指纹识别: %s", target)
 
 	// 为目标设置上下文
@@ -218,7 +221,7 @@ func (sc *ScanController) processSingleTargetFingerprint(target string) []interf
 
 	var results []interfaces.HTTPResponse
 
-	responses := sc.requestProcessor.ProcessURLs([]string{target})
+	responses := sc.requestProcessor.ProcessURLsWithContext(ctx, []string{target})
 
 	for _, resp := range responses {
 		fpResponse := sc.convertToFingerprintResponse(resp)
@@ -376,17 +379,17 @@ func (sc *ScanController) performActiveProbing(ctx context.Context, targets []st
 					// 如果需要单独对非主目标进行 Icon 探测，可以使用 ExecuteIconProbing，但目前 uniqueTargets 主要是主目标
 					// 所以这里留空或注释掉，以避免冗余。
 					/*
-					iconResults, err := sc.fingerprintEngine.ExecuteIconProbing(probeCtx, baseURL, sc.httpClient)
-					if err != nil {
-						logger.Debugf("Icon probing error: %v", err)
-					}
-					if iconResults != nil && len(iconResults.Matches) > 0 {
-						if formatter != nil {
-							sc.printFingerprintResultWithProgressClear(iconResults.Matches, iconResults.Response, formatter, "Icon探测")
+						iconResults, err := sc.fingerprintEngine.ExecuteIconProbing(probeCtx, baseURL, sc.httpClient)
+						if err != nil {
+							logger.Debugf("Icon probing error: %v", err)
 						}
-						httpResp := sc.convertProbeResult(iconResults)
-						localResults = append(localResults, httpResp)
-					}
+						if iconResults != nil && len(iconResults.Matches) > 0 {
+							if formatter != nil {
+								sc.printFingerprintResultWithProgressClear(iconResults.Matches, iconResults.Response, formatter, "Icon探测")
+							}
+							httpResp := sc.convertProbeResult(iconResults)
+							localResults = append(localResults, httpResp)
+						}
 					*/
 
 					// 3. 404 Page Probing

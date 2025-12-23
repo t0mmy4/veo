@@ -1,3 +1,5 @@
+//go:build passive
+
 package dirscan
 
 import (
@@ -205,7 +207,7 @@ func (da *DirscanAddon) TriggerScan() (*ScanResult, error) {
 		} else {
 			recursiveFilter = CreateResponseFilterFromExternal()
 		}
-		
+
 		// [取消] 二次指纹识别无需主动探测（icon和404）
 		// 仅保留被动页面识别，避免重复发包
 		// if recursiveFilter != nil {

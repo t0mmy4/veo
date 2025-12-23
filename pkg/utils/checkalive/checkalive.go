@@ -21,15 +21,15 @@ type ConnectivityChecker struct {
 func NewConnectivityChecker(cfg *config.Config) *ConnectivityChecker {
 	// 构造HTTP客户端配置
 	httpCfg := httpclient.DefaultConfig()
-	
+
 	// 从全局配置覆盖超时时间
 	if cfg != nil && cfg.Addon.Request.Timeout > 0 {
 		httpCfg.Timeout = time.Duration(cfg.Addon.Request.Timeout) * time.Second
 	} else {
 		httpCfg.Timeout = 5 * time.Second // 默认5秒，快速失败
 	}
-    
-    // 禁用重定向以加快检测速度
+
+	// 禁用重定向以加快检测速度
 	httpCfg.FollowRedirect = false
 	// 即使证书无效也认为是存活的
 	httpCfg.SkipTLSVerify = true
@@ -59,7 +59,7 @@ func (cc *ConnectivityChecker) BatchCheck(targets []string) []string {
 	var validTargets []string
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	
+
 	// 限制并发数
 	concurrency := 20
 	if cc.config != nil && cc.config.Module.Dirscan {
@@ -74,11 +74,11 @@ func (cc *ConnectivityChecker) BatchCheck(targets []string) []string {
 
 	for _, url := range candidates {
 		wg.Add(1)
-		
+
 		go func(targetURL string) {
 			sem <- struct{}{}
-			defer func() { 
-				<-sem 
+			defer func() {
+				<-sem
 				wg.Done()
 			}()
 
@@ -87,7 +87,7 @@ func (cc *ConnectivityChecker) BatchCheck(targets []string) []string {
 				validTargets = append(validTargets, targetURL)
 				mu.Unlock()
 			}
-			
+
 			current := atomic.AddInt64(&processedCount, 1)
 			if total > 0 && (current%5 == 0 || current == int64(total)) {
 				fmt.Printf("\r存活性检测: %d/%d (%.1f%%)", current, total, float64(current)/float64(total)*100)

@@ -79,7 +79,7 @@ func (rp *RequestProcessor) updateProcessingStats(response *interfaces.HTTPRespo
 		// 注意：这里需要传递错误信息，但当前架构中没有传递错误信息
 		// 暂时使用简单的超时统计逻辑
 		atomic.AddInt64(&stats.TimeoutCount, 1)
-		
+
 		// 修复：失败的请求也应该计入已完成请求数，因为它们已经结束了（无论是超时还是错误）
 		// 否则会导致 Request 进度条永远达不到 100%
 		if rp.statsUpdater != nil {

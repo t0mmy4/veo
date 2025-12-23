@@ -1,3 +1,5 @@
+//go:build passive
+
 package auth
 
 import (

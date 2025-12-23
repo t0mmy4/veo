@@ -16,6 +16,13 @@ GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 BUILD_TIME := $(shell date +"%Y-%m-%d_%H:%M:%S")
 
+# Build Tags
+# 默认构建：主动模式（不带 tag）
+# 被动代理模式：go build -tags passive
+PASSIVE_TAG := passive
+PASSIVE_BUILD_DIR := $(BUILD_DIR)/passive
+PASSIVE_RELEASE_DIR := $(RELEASE_DIR)/passive
+
 # 编译标志
 LDFLAGS := -s -w -buildid=
 LDFLAGS += -X main.version=$(VERSION)
@@ -62,8 +69,11 @@ help: ## 显示帮助信息
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  $(YELLOW)%-15s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@echo ""
 	@echo "$(GREEN)示例:$(RESET)"
-	@echo "  make build              # 编译当前平台"
-	@echo "  make build-all          # 编译所有平台"
+	@echo "  make build              # 编译当前平台（主动模式，默认）"
+	@echo "  make build-passive      # 编译当前平台（被动代理模式，-tags passive）"
+	@echo "  make build-both         # 同时编译主动+被动（当前平台）"
+	@echo "  make build-all          # 编译所有平台（主动模式）"
+	@echo "  make build-all-passive  # 编译所有平台（被动模式，输出到 dist/passive）"
 	@echo "  make release            # 创建发布包"
 	@echo "  make clean              # 清理构建文件"
 
@@ -116,62 +126,133 @@ check: ## 检查代码
 # ============================================================================
 
 .PHONY: build
-build: deps ## 编译当前平台
-	@echo "$(BLUE)[BUILD]$(RESET) 编译当前平台..."
+build: deps ## 编译当前平台（主动模式，默认）
+	@echo "$(BLUE)[BUILD]$(RESET) 编译当前平台（主动模式）..."
 	@mkdir -p $(BUILD_DIR)
 	@CGO_ENABLED=$(CGO_ENABLED) go build $(BUILDFLAGS) -gcflags="$(GCFLAGS)" -asmflags="$(ASMFLAGS)" -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(PROJECT_NAME) $(MAIN_FILE)
 	@echo "$(GREEN)[SUCCESS]$(RESET) 编译完成: $(BUILD_DIR)/$(PROJECT_NAME)"
 
+.PHONY: build-passive
+build-passive: deps ## 编译当前平台（被动代理模式，-tags passive）
+	@echo "$(BLUE)[BUILD]$(RESET) 编译当前平台（被动代理模式）..."
+	@mkdir -p $(PASSIVE_BUILD_DIR)
+	@CGO_ENABLED=$(CGO_ENABLED) go build $(BUILDFLAGS) -tags $(PASSIVE_TAG) -gcflags="$(GCFLAGS)" -asmflags="$(ASMFLAGS)" -ldflags="$(LDFLAGS)" -o $(PASSIVE_BUILD_DIR)/$(PROJECT_NAME) $(MAIN_FILE)
+	@echo "$(GREEN)[SUCCESS]$(RESET) 编译完成: $(PASSIVE_BUILD_DIR)/$(PROJECT_NAME)"
+
+.PHONY: build-both
+build-both: build build-passive ## 同时编译主动+被动（当前平台）
+
 .PHONY: build-all
-build-all: ## 编译所有平台
-	@echo "$(BLUE)[BUILD-ALL]$(RESET) 编译所有平台..."
-	@./build.sh -a
+build-all: ## 编译所有平台（主动模式）
+	@echo "$(BLUE)[BUILD-ALL]$(RESET) 编译所有平台（主动模式）..."
+	@VERSION=$(VERSION) ./build.sh -a
+
+.PHONY: build-all-passive
+build-all-passive: ## 编译所有平台（被动代理模式，输出到 dist/passive）
+	@echo "$(BLUE)[BUILD-ALL]$(RESET) 编译所有平台（被动代理模式）..."
+	@mkdir -p $(PASSIVE_BUILD_DIR)
+	@VERSION=$(VERSION) GOFLAGS="-tags=$(PASSIVE_TAG)" ./build.sh -a -o $(PASSIVE_BUILD_DIR)
+
+.PHONY: build-all-both
+build-all-both: build-all build-all-passive ## 编译所有平台（主动+被动）
 
 .PHONY: build-windows
-build-windows: ## 编译 Windows 平台
-	@echo "$(BLUE)[BUILD]$(RESET) 编译 Windows 平台..."
+build-windows: ## 编译 Windows 平台（主动模式）
+	@echo "$(BLUE)[BUILD]$(RESET) 编译 Windows 平台（主动模式）..."
 	@mkdir -p $(BUILD_DIR)
 	@CGO_ENABLED=$(CGO_ENABLED) GOOS=windows GOARCH=amd64 go build $(BUILDFLAGS) -gcflags="$(GCFLAGS)" -asmflags="$(ASMFLAGS)" -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(PROJECT_NAME)_windows_amd64.exe $(MAIN_FILE)
 	@echo "$(GREEN)[SUCCESS]$(RESET) Windows 编译完成"
 
+.PHONY: build-windows-passive
+build-windows-passive: ## 编译 Windows 平台（被动代理模式）
+	@echo "$(BLUE)[BUILD]$(RESET) 编译 Windows 平台（被动代理模式）..."
+	@mkdir -p $(PASSIVE_BUILD_DIR)
+	@CGO_ENABLED=$(CGO_ENABLED) GOOS=windows GOARCH=amd64 go build $(BUILDFLAGS) -tags $(PASSIVE_TAG) -gcflags="$(GCFLAGS)" -asmflags="$(ASMFLAGS)" -ldflags="$(LDFLAGS)" -o $(PASSIVE_BUILD_DIR)/$(PROJECT_NAME)_windows_amd64.exe $(MAIN_FILE)
+	@echo "$(GREEN)[SUCCESS]$(RESET) Windows 被动模式编译完成"
+
+.PHONY: build-windows-both
+build-windows-both: build-windows build-windows-passive ## 编译 Windows 平台（主动+被动）
+
 .PHONY: build-linux
-build-linux: ## 编译 Linux 平台
-	@echo "$(BLUE)[BUILD]$(RESET) 编译 Linux 平台..."
+build-linux: ## 编译 Linux 平台（主动模式）
+	@echo "$(BLUE)[BUILD]$(RESET) 编译 Linux 平台（主动模式）..."
 	@mkdir -p $(BUILD_DIR)
 	@CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=amd64 go build $(BUILDFLAGS) -gcflags="$(GCFLAGS)" -asmflags="$(ASMFLAGS)" -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(PROJECT_NAME)_linux_amd64 $(MAIN_FILE)
 	@echo "$(GREEN)[SUCCESS]$(RESET) Linux 编译完成"
 
+.PHONY: build-linux-passive
+build-linux-passive: ## 编译 Linux 平台（被动代理模式）
+	@echo "$(BLUE)[BUILD]$(RESET) 编译 Linux 平台（被动代理模式）..."
+	@mkdir -p $(PASSIVE_BUILD_DIR)
+	@CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=amd64 go build $(BUILDFLAGS) -tags $(PASSIVE_TAG) -gcflags="$(GCFLAGS)" -asmflags="$(ASMFLAGS)" -ldflags="$(LDFLAGS)" -o $(PASSIVE_BUILD_DIR)/$(PROJECT_NAME)_linux_amd64 $(MAIN_FILE)
+	@echo "$(GREEN)[SUCCESS]$(RESET) Linux 被动模式编译完成"
+
+.PHONY: build-linux-both
+build-linux-both: build-linux build-linux-passive ## 编译 Linux 平台（主动+被动）
+
 .PHONY: build-darwin
-build-darwin: ## 编译 macOS 平台
-	@echo "$(BLUE)[BUILD]$(RESET) 编译 macOS 平台..."
+build-darwin: ## 编译 macOS 平台（主动模式）
+	@echo "$(BLUE)[BUILD]$(RESET) 编译 macOS 平台（主动模式）..."
 	@mkdir -p $(BUILD_DIR)
 	@CGO_ENABLED=$(CGO_ENABLED) GOOS=darwin GOARCH=amd64 go build $(BUILDFLAGS) -gcflags="$(GCFLAGS)" -asmflags="$(ASMFLAGS)" -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(PROJECT_NAME)_darwin_amd64 $(MAIN_FILE)
 	@CGO_ENABLED=$(CGO_ENABLED) GOOS=darwin GOARCH=arm64 go build $(BUILDFLAGS) -gcflags="$(GCFLAGS)" -asmflags="$(ASMFLAGS)" -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(PROJECT_NAME)_darwin_arm64 $(MAIN_FILE)
 	@echo "$(GREEN)[SUCCESS]$(RESET) macOS 编译完成"
+
+.PHONY: build-darwin-passive
+build-darwin-passive: ## 编译 macOS 平台（被动代理模式）
+	@echo "$(BLUE)[BUILD]$(RESET) 编译 macOS 平台（被动代理模式）..."
+	@mkdir -p $(PASSIVE_BUILD_DIR)
+	@CGO_ENABLED=$(CGO_ENABLED) GOOS=darwin GOARCH=amd64 go build $(BUILDFLAGS) -tags $(PASSIVE_TAG) -gcflags="$(GCFLAGS)" -asmflags="$(ASMFLAGS)" -ldflags="$(LDFLAGS)" -o $(PASSIVE_BUILD_DIR)/$(PROJECT_NAME)_darwin_amd64 $(MAIN_FILE)
+	@CGO_ENABLED=$(CGO_ENABLED) GOOS=darwin GOARCH=arm64 go build $(BUILDFLAGS) -tags $(PASSIVE_TAG) -gcflags="$(GCFLAGS)" -asmflags="$(ASMFLAGS)" -ldflags="$(LDFLAGS)" -o $(PASSIVE_BUILD_DIR)/$(PROJECT_NAME)_darwin_arm64 $(MAIN_FILE)
+	@echo "$(GREEN)[SUCCESS]$(RESET) macOS 被动模式编译完成"
+
+.PHONY: build-darwin-both
+build-darwin-both: build-darwin build-darwin-passive ## 编译 macOS 平台（主动+被动）
 
 # ============================================================================
 # 优化命令
 # ============================================================================
 
 .PHONY: build-optimized
-build-optimized: deps ## 编译优化版本
-	@echo "$(BLUE)[BUILD-OPT]$(RESET) 编译优化版本..."
-	@./build.sh
+build-optimized: deps ## 编译优化版本（主动模式）
+	@echo "$(BLUE)[BUILD-OPT]$(RESET) 编译优化版本（主动模式）..."
+	@VERSION=$(VERSION) ./build.sh
+
+.PHONY: build-optimized-passive
+build-optimized-passive: deps ## 编译优化版本（被动代理模式，-tags passive）
+	@echo "$(BLUE)[BUILD-OPT]$(RESET) 编译优化版本（被动代理模式）..."
+	@mkdir -p $(PASSIVE_BUILD_DIR)
+	@VERSION=$(VERSION) GOFLAGS="-tags=$(PASSIVE_TAG)" ./build.sh -o $(PASSIVE_BUILD_DIR)
+
+.PHONY: build-optimized-both
+build-optimized-both: build-optimized build-optimized-passive ## 编译优化版本（主动+被动）
 
 .PHONY: build-debug
-build-debug: deps ## 编译调试版本
-	@echo "$(BLUE)[BUILD-DEBUG]$(RESET) 编译调试版本..."
-	@./build.sh --with-debug
+build-debug: deps ## 编译调试版本（主动模式）
+	@echo "$(BLUE)[BUILD-DEBUG]$(RESET) 编译调试版本（主动模式）..."
+	@VERSION=$(VERSION) ./build.sh --with-debug
+
+.PHONY: build-debug-passive
+build-debug-passive: deps ## 编译调试版本（被动代理模式，-tags passive）
+	@echo "$(BLUE)[BUILD-DEBUG]$(RESET) 编译调试版本（被动代理模式）..."
+	@mkdir -p $(PASSIVE_BUILD_DIR)
+	@VERSION=$(VERSION) GOFLAGS="-tags=$(PASSIVE_TAG)" ./build.sh --with-debug -o $(PASSIVE_BUILD_DIR)
+
+.PHONY: build-debug-both
+build-debug-both: build-debug build-debug-passive ## 编译调试版本（主动+被动）
 
 .PHONY: compress
-compress: ## UPX压缩现有二进制文件
+compress: ## UPX压缩现有二进制文件（包含 dist/ 与 dist/passive/）
 	@echo "$(BLUE)[COMPRESS]$(RESET) 压缩二进制文件..."
 	@if command -v upx >/dev/null 2>&1; then \
-		for file in $(BUILD_DIR)/*; do \
-			if [ -f "$$file" ] && [ -x "$$file" ]; then \
-				echo "压缩: $$file"; \
-				upx --best --lzma "$$file" 2>/dev/null || echo "跳过: $$file"; \
-			fi; \
+		for dir in $(BUILD_DIR) $(PASSIVE_BUILD_DIR); do \
+			if [ ! -d "$$dir" ]; then continue; fi; \
+			for file in "$$dir"/*; do \
+				if [ -f "$$file" ] && [ -x "$$file" ]; then \
+					echo "压缩: $$file"; \
+					upx --best --lzma "$$file" 2>/dev/null || echo "跳过: $$file"; \
+				fi; \
+			done; \
 		done; \
 		echo "$(GREEN)[SUCCESS]$(RESET) 压缩完成"; \
 	else \
@@ -183,14 +264,30 @@ compress: ## UPX压缩现有二进制文件
 # ============================================================================
 
 .PHONY: test
-test: ## 运行测试
-	@echo "$(BLUE)[TEST]$(RESET) 运行测试..."
+test: ## 运行测试（主动模式，默认）
+	@echo "$(BLUE)[TEST]$(RESET) 运行测试（主动模式）..."
 	@go test -v ./...
 
+.PHONY: test-passive
+test-passive: ## 运行测试（被动代理模式，-tags passive）
+	@echo "$(BLUE)[TEST]$(RESET) 运行测试（被动代理模式）..."
+	@go test -tags $(PASSIVE_TAG) -v ./...
+
+.PHONY: test-both
+test-both: test test-passive ## 运行测试（主动+被动）
+
 .PHONY: test-race
-test-race: ## 运行竞态检测测试
-	@echo "$(BLUE)[TEST-RACE]$(RESET) 运行竞态检测测试..."
+test-race: ## 运行竞态检测测试（主动模式）
+	@echo "$(BLUE)[TEST-RACE]$(RESET) 运行竞态检测测试（主动模式）..."
 	@go test -race -v ./...
+
+.PHONY: test-race-passive
+test-race-passive: ## 运行竞态检测测试（被动代理模式，-tags passive）
+	@echo "$(BLUE)[TEST-RACE]$(RESET) 运行竞态检测测试（被动代理模式）..."
+	@go test -tags $(PASSIVE_TAG) -race -v ./...
+
+.PHONY: test-race-both
+test-race-both: test-race test-race-passive ## 运行竞态检测测试（主动+被动）
 
 .PHONY: bench
 bench: ## 运行性能测试
@@ -209,14 +306,32 @@ coverage: ## 生成测试覆盖率报告
 # ============================================================================
 
 .PHONY: release
-release: build-all ## 创建发布包
-	@echo "$(BLUE)[RELEASE]$(RESET) 创建发布包..."
-	@./release.sh
+release: build-all ## 创建发布包（主动模式）
+	@echo "$(BLUE)[RELEASE]$(RESET) 创建发布包（主动模式）..."
+	@VERSION=$(VERSION) ./release.sh
+
+.PHONY: release-passive
+release-passive: build-all-passive ## 创建发布包（被动代理模式）
+	@echo "$(BLUE)[RELEASE]$(RESET) 创建发布包（被动代理模式）..."
+	@mkdir -p $(PASSIVE_RELEASE_DIR)
+	@VERSION=$(VERSION) ./release.sh -b $(PASSIVE_BUILD_DIR) -r $(PASSIVE_RELEASE_DIR)
+
+.PHONY: release-both
+release-both: release release-passive ## 创建发布包（主动+被动）
 
 .PHONY: release-clean
-release-clean: clean-release build-all ## 清理并创建发布包
-	@echo "$(BLUE)[RELEASE-CLEAN]$(RESET) 清理并创建发布包..."
-	@./release.sh
+release-clean: clean-release build-all ## 清理并创建发布包（主动模式）
+	@echo "$(BLUE)[RELEASE-CLEAN]$(RESET) 清理并创建发布包（主动模式）..."
+	@VERSION=$(VERSION) ./release.sh
+
+.PHONY: release-clean-passive
+release-clean-passive: clean-release build-all-passive ## 清理并创建发布包（被动代理模式）
+	@echo "$(BLUE)[RELEASE-CLEAN]$(RESET) 清理并创建发布包（被动代理模式）..."
+	@mkdir -p $(PASSIVE_RELEASE_DIR)
+	@VERSION=$(VERSION) ./release.sh -b $(PASSIVE_BUILD_DIR) -r $(PASSIVE_RELEASE_DIR)
+
+.PHONY: release-clean-both
+release-clean-both: release-clean release-clean-passive ## 清理并创建发布包（主动+被动）
 
 # ============================================================================
 # 开发命令
@@ -311,19 +426,29 @@ quick: clean-dist build ## 快速构建 (清理+编译)
 	@echo "$(GREEN)[SUCCESS]$(RESET) 快速构建完成"
 
 .PHONY: all
-all: clean deps check test build-all compress ## 完整构建流程
+all: clean deps check test build-all compress ## 完整构建流程（主动模式）
 	@echo "$(GREEN)[SUCCESS]$(RESET) 完整构建流程完成"
+
+.PHONY: all-both
+all-both: clean deps check test-both build-all-both compress ## 完整构建流程（主动+被动）
+	@echo "$(GREEN)[SUCCESS]$(RESET) 完整构建流程完成（主动+被动）"
 
 # ============================================================================
 # 文件目标
 # ============================================================================
 
 # 防止文件名冲突
-.PHONY: build build-all build-windows build-linux build-darwin \
-        build-optimized build-debug compress clean clean-dist clean-release \
-        deps verify check test test-race bench coverage release release-clean \
+.PHONY: build build-passive build-both build-all build-all-passive build-all-both \
+        build-windows build-windows-passive build-windows-both \
+        build-linux build-linux-passive build-linux-both \
+        build-darwin build-darwin-passive build-darwin-both \
+        build-optimized build-optimized-passive build-optimized-both \
+        build-debug build-debug-passive build-debug-both \
+        compress clean clean-dist clean-release \
+        deps verify check test test-passive test-both test-race test-race-passive test-race-both bench coverage \
+        release release-passive release-both release-clean release-clean-passive release-clean-both \
         dev install uninstall lint fmt mod-update info size docker-build \
-        quick all help 
+        quick all all-both help 
 
 .PHONY: build-darwin-optimized build-darwin-debug test-macos-optimization 
 

@@ -62,4 +62,3 @@ func Pick() string {
 	rngMu.Unlock()
 	return list[idx]
 }
-

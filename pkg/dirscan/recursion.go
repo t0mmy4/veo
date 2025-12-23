@@ -24,7 +24,7 @@ func RunRecursiveScan(
 	sharedFilter *ResponseFilter,
 ) ([]interfaces.HTTPResponse, error) {
 	var allResults []interfaces.HTTPResponse
-	
+
 	// 初始化递归变量
 	currentTargets := initialTargets
 	alreadyScanned := make(map[string]bool)
@@ -108,6 +108,7 @@ func RunRecursiveScan(
 
 	return allResults, nil
 }
+
 // ExtractNextLevelTargets 提取下一层需要递归扫描的目标
 func ExtractNextLevelTargets(results []interfaces.HTTPResponse, alreadyScanned map[string]bool) []string {
 	var newTargets []string
@@ -166,7 +167,7 @@ func ExtractNextLevelTargets(results []interfaces.HTTPResponse, alreadyScanned m
 
 		thisRoundTargets[targetURL] = struct{}{}
 		newTargets = append(newTargets, targetURL)
-		
+
 		// 标记为已扫描（注意：调用者负责维护全局的alreadyScanned，或者我们在这里更新）
 		// 这里为了纯函数特性，我们只读取alreadyScanned，调用方负责合并
 		// 但为了方便，我们假设调用方会把返回的newTargets加入alreadyScanned

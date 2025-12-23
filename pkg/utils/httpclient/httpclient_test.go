@@ -163,4 +163,3 @@ func TestHTTPClientTLSConfiguration(t *testing.T) {
 		})
 	}
 }
-

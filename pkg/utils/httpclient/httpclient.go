@@ -56,8 +56,8 @@ func DefaultConfig() *Config {
 		FollowRedirect: true, // 默认跟随重定向
 		MaxRedirects:   5,    // 最大5次重定向
 		UserAgent:      ua,
-		SkipTLSVerify:  true,            // 网络安全扫描工具常用设置
-		TLSTimeout:     5 * time.Second, // TLS握手超时
+		SkipTLSVerify:  true,             // 网络安全扫描工具常用设置
+		TLSTimeout:     5 * time.Second,  // TLS握手超时
 		MaxBodySize:    10 * 1024 * 1024, // 10MB
 		MaxConcurrent:  1000,
 	}
@@ -203,13 +203,13 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 	// Prepare Request
 	req.SetRequestURI(rawURL)
 	req.Header.SetMethod(fasthttp.MethodGet)
-	
+
 	// Default Headers
 	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 	req.Header.Set("Cache-Control", "no-cache")
-	
+
 	// Apply Global Custom Headers
 	if len(c.customHeaders) > 0 {
 		for k, v := range c.customHeaders {
@@ -234,7 +234,7 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 
 	// Extract Info
 	statusCode = resp.StatusCode()
-	
+
 	// Headers Map
 	headers = make(map[string][]string)
 	resp.Header.VisitAll(func(key, value []byte) {
@@ -251,7 +251,7 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 	} else {
 		respBody = resp.Body()
 	}
-	
+
 	// Convert to string (Copy happens here, safe to release Response after)
 	body = string(respBody)
 

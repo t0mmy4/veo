@@ -122,11 +122,11 @@ func (rp *RequestProcessor) processResponseBody(rawBody string) string {
 func (rp *RequestProcessor) processResponse(url string, statusCode int, body string, responseHeaders, requestHeaders map[string][]string, startTime time.Time) (*interfaces.HTTPResponse, error) {
 	// 响应体截断处理
 	finalBody := rp.processResponseBody(body)
-	
+
 	// 提取信息
 	title := rp.extractTitleSafely(url, finalBody)
 	contentLength := int64(len(finalBody))
-	
+
 	// 提取 Content-Type
 	contentType := "unknown"
 	if ct, ok := responseHeaders["Content-Type"]; ok && len(ct) > 0 {
@@ -160,7 +160,7 @@ func (rp *RequestProcessor) processResponse(url string, statusCode int, body str
 		IsDirectory:     rp.isDirectoryURL(url),
 		Length:          contentLength,
 		Duration:        duration,
-		Depth:           0,    // 深度信息需要外部设置
+		Depth:           0, // 深度信息需要外部设置
 		ResponseBody:    finalBody,
 	}
 

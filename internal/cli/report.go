@@ -20,8 +20,6 @@ type ReportConfig struct {
 	Modules                []string
 	OutputPath             string
 	ShowFingerprintSnippet bool
-	// ScanParams 用于JSON报告的扫描参数
-	ScanParams map[string]interface{}
 }
 
 // GenerateReport 生成报告（通用函数）
@@ -53,12 +51,10 @@ func generateCustomReport(config *ReportConfig, dirResults, fingerprintResults [
 	case strings.HasSuffix(lowerOutput, ".json"):
 		// 指纹匹配信息
 		var matches []types.FingerprintMatch
-		var stats *fingerprint.Statistics
 		if fpEngine != nil {
 			if raw := fpEngine.GetMatches(); len(raw) > 0 {
 				matches = convertFingerprintMatches(raw, config.ShowFingerprintSnippet)
 			}
-			stats = fpEngine.GetStats()
 		}
 
 		// 确保指纹结果列表不为空（如果只有dirscan结果，filterResult中可能包含所有）
@@ -71,7 +67,7 @@ func generateCustomReport(config *ReportConfig, dirResults, fingerprintResults [
 			}
 		}
 
-		jsonStr, err := report.GenerateCombinedJSON(dirResults, fingerprintResults, matches, toReporterStats(stats), config.ScanParams)
+		jsonStr, err := report.GenerateCombinedJSON(dirResults, fingerprintResults, matches)
 		if err != nil {
 			return "", err
 		}
@@ -158,20 +154,6 @@ func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch, includeS
 	}
 
 	return converted
-}
-
-func toReporterStats(stats *fingerprint.Statistics) *report.FingerprintStats {
-	if stats == nil {
-		return nil
-	}
-	return &report.FingerprintStats{
-		TotalRequests:    stats.TotalRequests,
-		MatchedRequests:  stats.MatchedRequests,
-		FilteredRequests: stats.FilteredRequests,
-		RulesLoaded:      stats.RulesLoaded,
-		StartTime:        stats.StartTime,
-		LastMatchTime:    stats.LastMatchTime,
-	}
 }
 
 // FormatFingerprintDisplay 包装 formatter

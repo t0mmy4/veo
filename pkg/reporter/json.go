@@ -3,14 +3,9 @@ package report
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
 
 	"veo/pkg/types"
 	"veo/pkg/utils/interfaces"
-	"veo/pkg/utils/logger"
 )
 
 // CombinedAPIResponse 统一的API/CLI JSON响应结构
@@ -43,144 +38,21 @@ type SDKFingerprintMatchOutput struct {
 	RuleContent string `json:"rule_content,omitempty"`
 }
 
-// buildCombinedAPIResponse 构建统一的API/CLI JSON响应结构
-func (jrg *JSONReportGenerator) buildCombinedAPIResponse(dirPages []interfaces.HTTPResponse, fpPages []interfaces.HTTPResponse, matches []types.FingerprintMatch, stats *FingerprintStats, scanParams map[string]interface{}) CombinedAPIResponse {
-	dirPagesAPI := makeDirscanPageResults(dirPages)
-	fpPagesAPI := makeFingerprintPageResults(fpPages, matches)
-
+func buildCombinedAPIResponse(dirPages []interfaces.HTTPResponse, fpPages []interfaces.HTTPResponse, matches []types.FingerprintMatch) CombinedAPIResponse {
 	return CombinedAPIResponse{
-		Fingerprint: fpPagesAPI,
-		Dirscan:     dirPagesAPI,
-	}
-}
-type JSONReportGenerator struct {
-	startTime  time.Time
-	outputPath string
-}
-
-// NewJSONReportGenerator 创建新的JSON报告生成器
-func NewJSONReportGenerator() *JSONReportGenerator {
-	return &JSONReportGenerator{
-		startTime: time.Now(),
+		Fingerprint: makeFingerprintPageResults(fpPages, matches),
+		Dirscan:     makeDirscanPageResults(dirPages),
 	}
 }
 
-// NewCustomJSONReportGenerator 创建自定义输出路径的JSON报告生成器
-func NewCustomJSONReportGenerator(outputPath string) *JSONReportGenerator {
-	return &JSONReportGenerator{
-		startTime:  time.Now(),
-		outputPath: outputPath,
-	}
-}
-
-// GenerateDirscanReport 生成目录扫描JSON报告
-func (jrg *JSONReportGenerator) GenerateDirscanReport(filterResult *interfaces.FilterResult, target string, scanParams map[string]interface{}) (string, error) {
-	dirPages := extractResponses(filterResult)
-	resp := jrg.buildCombinedAPIResponse(dirPages, nil, nil, nil, scanParams)
-	return jrg.saveCombinedResponse(resp, target, "dirscan")
-}
-
-// FingerprintStats 报告所需的指纹统计摘要
-type FingerprintStats struct {
-	TotalRequests    int64     `json:"total_requests"`
-	MatchedRequests  int64     `json:"matched_requests"`
-	FilteredRequests int64     `json:"filtered_requests"`
-	RulesLoaded      int       `json:"rules_loaded"`
-	StartTime        time.Time `json:"start_time"`
-	LastMatchTime    time.Time `json:"last_match_time"`
-}
-
-// GenerateFingerprintReport 生成指纹识别JSON报告
-func (jrg *JSONReportGenerator) GenerateFingerprintReport(responses []interfaces.HTTPResponse, matches []types.FingerprintMatch, stats *FingerprintStats, target string, scanParams map[string]interface{}) (string, error) {
-	resp := jrg.buildCombinedAPIResponse(nil, responses, matches, stats, scanParams)
-	return jrg.saveCombinedResponse(resp, target, "fingerprint")
-}
-
-func GenerateCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages []interfaces.HTTPResponse, matches []types.FingerprintMatch, stats *FingerprintStats, scanParams map[string]interface{}) (string, error) {
-	generator := NewJSONReportGenerator()
-	result := generator.buildCombinedAPIResponse(dirPages, fingerprintPages, matches, stats, scanParams)
+// GenerateCombinedJSON 生成合并 JSON（仅负责序列化，不做文件 IO）
+func GenerateCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages []interfaces.HTTPResponse, matches []types.FingerprintMatch) (string, error) {
+	result := buildCombinedAPIResponse(dirPages, fingerprintPages, matches)
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("JSON序列化失败: %v", err)
 	}
 	return string(data), nil
-}
-
-// GenerateCustomCombinedJSON 生成合并JSON报告（写入指定文件）
-func GenerateCustomCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages []interfaces.HTTPResponse, matches []types.FingerprintMatch, stats *FingerprintStats, target string, scanParams map[string]interface{}, outputPath string) (string, error) {
-	jrg := NewCustomJSONReportGenerator(outputPath)
-	result := jrg.buildCombinedAPIResponse(dirPages, fingerprintPages, matches, stats, scanParams)
-	return jrg.saveCombinedResponse(result, target, "combined")
-}
-
-// extractResponses 提取过滤结果中的有效页面
-func extractResponses(filterResult *interfaces.FilterResult) []interfaces.HTTPResponse {
-	if filterResult == nil {
-		return nil
-	}
-
-	pages := filterResult.ValidPages
-	if len(pages) == 0 {
-		return nil
-	}
-
-	result := make([]interfaces.HTTPResponse, len(pages))
-	for i, p := range pages {
-		if p != nil {
-			result[i] = *p
-		}
-	}
-	return result
-}
-
-// buildCombinedAPIResponse 构建统一的API/CLI JSON响应结构
-// func (jrg *JSONReportGenerator) buildCombinedAPIResponse(dirPages []interfaces.HTTPResponse, fpPages []interfaces.HTTPResponse, matches []types.FingerprintMatch, stats *FingerprintStats, scanParams map[string]interface{}) CombinedAPIResponse {
-// 	dirPagesAPI := makeDirscanPageResults(dirPages)
-// 	fpPagesAPI := makeFingerprintPageResults(fpPages, matches)
-//
-// 	return CombinedAPIResponse{
-// 		Fingerprint: fpPagesAPI,
-// 		Dirscan:     dirPagesAPI,
-// 	}
-// }
-
-func (jrg *JSONReportGenerator) saveCombinedResponse(resp CombinedAPIResponse, target, scanType string) (string, error) {
-	data, err := json.MarshalIndent(resp, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("JSON序列化失败: %v", err)
-	}
-
-	var filePath string
-
-	if jrg.outputPath != "" {
-		filePath = jrg.outputPath
-		outputDir := filepath.Dir(filePath)
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			return "", fmt.Errorf("创建输出目录失败: %v", err)
-		}
-	} else {
-		timestamp := time.Now().Format("20060102_150405")
-		safeName := sanitizeFilename(target)
-		prefix := scanType
-		if prefix == "" {
-			prefix = "combined"
-		}
-		fileName := fmt.Sprintf("%s_%s_%s.json", prefix, safeName, timestamp)
-
-		outputDir := "./reports"
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			return "", fmt.Errorf("创建输出目录失败: %v", err)
-		}
-
-		filePath = filepath.Join(outputDir, fileName)
-	}
-
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		return "", fmt.Errorf("写入JSON文件失败: %v", err)
-	}
-
-	logger.Debugf("JSON报告已生成: %s", filePath)
-	return filePath, nil
 }
 
 // makeDirscanPageResults 构造目录扫描结果列表
@@ -319,20 +191,4 @@ func mergeFingerprintOutputs(base []SDKFingerprintMatchOutput, extra []SDKFinger
 	}
 
 	return base
-}
-
-// sanitizeFilename 清理文件名中的非法字符
-func sanitizeFilename(filename string) string {
-	replacer := strings.NewReplacer(
-		":", "_",
-		"/", "_",
-		"\\", "_",
-		"?", "_",
-		"*", "_",
-		"|", "_",
-		"<", "_",
-		">", "_",
-		"\"", "_",
-	)
-	return replacer.Replace(filename)
 }

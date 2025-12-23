@@ -1,9 +1,12 @@
+//go:build passive
+
 package proxy
 
 import (
-	"veo/pkg/utils/logger"
 	"io"
 	"net/http"
+
+	"veo/pkg/utils/logger"
 )
 
 type Addon interface {

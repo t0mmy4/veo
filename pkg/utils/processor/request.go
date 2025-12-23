@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"regexp"
@@ -10,16 +11,14 @@ import (
 
 	"veo/pkg/utils/httpclient"
 	"veo/pkg/utils/interfaces"
+	"veo/pkg/utils/logger"
 	"veo/pkg/utils/processor/auth"
 	"veo/pkg/utils/shared"
 	"veo/pkg/utils/useragent"
-	"veo/proxy"
-	"veo/pkg/utils/logger"
 )
 
 // RequestProcessor 请求处理器
 type RequestProcessor struct {
-	proxy.BaseAddon
 	client         *httpclient.Client
 	config         *RequestConfig
 	mu             sync.RWMutex
@@ -29,7 +28,7 @@ type RequestProcessor struct {
 	statsUpdater   StatsUpdater           // 统计更新器
 	batchMode      bool                   // 批量扫描模式标志
 
-	// 新增：HTTP认证头部管理
+	// HTTP认证头部管理
 	customHeaders        map[string]string  // CLI指定的自定义头部
 	authDetector         *auth.AuthDetector // 认证检测器
 	redirectSameHostOnly bool               // 是否限制重定向在同主机
@@ -148,10 +147,18 @@ func (rp *RequestProcessor) HasCustomHeaders() bool {
 
 // 请求处理器核心方法
 
-// ProcessURLs 处理URL列表，发起HTTP请求并返回响应结构体列表（Worker Pool优化版本）
+// ProcessURLs 处理URL列表，发起HTTP请求并返回响应结构体列表
 func (rp *RequestProcessor) ProcessURLs(urls []string) []*interfaces.HTTPResponse {
+	return rp.ProcessURLsWithContext(context.Background(), urls)
+}
+
+// ProcessURLsWithContext 处理URL列表（可取消）
+func (rp *RequestProcessor) ProcessURLsWithContext(ctx context.Context, urls []string) []*interfaces.HTTPResponse {
 	if len(urls) == 0 {
 		return []*interfaces.HTTPResponse{}
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	// 初始化处理统计
@@ -172,8 +179,8 @@ func (rp *RequestProcessor) ProcessURLs(urls []string) []*interfaces.HTTPRespons
 	responses := make([]*interfaces.HTTPResponse, 0, len(urls))
 	var responsesMu sync.Mutex
 
-	// 并发优化：使用 semaphore 模式直接处理
-	rp.processURLsConcurrent(urls, &responses, &responsesMu, stats, nil)
+	// 并发处理（worker pool）：支持 ctx 取消后停止派发
+	rp.processURLsConcurrent(ctx, urls, &responses, &responsesMu, stats, nil)
 
 	// 完成处理
 	rp.finalizeProcessing(stats)
@@ -181,9 +188,20 @@ func (rp *RequestProcessor) ProcessURLs(urls []string) []*interfaces.HTTPRespons
 	return responses
 }
 
-
 // ProcessURLsWithCallback 处理URL列表，并对每个响应执行回调
 func (rp *RequestProcessor) ProcessURLsWithCallback(urls []string, callback func(*interfaces.HTTPResponse)) []*interfaces.HTTPResponse {
+	return rp.ProcessURLsWithCallbackWithContext(context.Background(), urls, callback)
+}
+
+// ProcessURLsWithCallbackWithContext 处理URL列表（可取消），并对每个响应执行回调
+func (rp *RequestProcessor) ProcessURLsWithCallbackWithContext(ctx context.Context, urls []string, callback func(*interfaces.HTTPResponse)) []*interfaces.HTTPResponse {
+	if len(urls) == 0 {
+		return []*interfaces.HTTPResponse{}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	// 初始化统计
 	stats := rp.initializeProcessingStats(len(urls), rp.config.MaxConcurrent, rp.config.RandomUserAgent)
 
@@ -200,8 +218,8 @@ func (rp *RequestProcessor) ProcessURLsWithCallback(urls []string, callback func
 	responses := make([]*interfaces.HTTPResponse, 0, len(urls))
 	var responsesMu sync.Mutex
 
-	// 使用 semaphore 模式直接处理
-	rp.processURLsConcurrent(urls, &responses, &responsesMu, stats, callback)
+	// 并发处理（worker pool）：支持 ctx 取消后停止派发
+	rp.processURLsConcurrent(ctx, urls, &responses, &responsesMu, stats, callback)
 
 	// 完成处理
 	rp.finalizeProcessing(stats)
@@ -209,86 +227,130 @@ func (rp *RequestProcessor) ProcessURLsWithCallback(urls []string, callback func
 	return responses
 }
 
-// processURLsConcurrent 使用信号量并发处理URL列表
-func (rp *RequestProcessor) processURLsConcurrent(urls []string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats, callback func(*interfaces.HTTPResponse)) {
-	var wg sync.WaitGroup
-	// 使用带缓冲的channel控制并发数
-	sem := make(chan struct{}, rp.config.MaxConcurrent)
-
-	for _, targetURL := range urls {
-		wg.Add(1)
-		go func(targetURL string) {
-			defer wg.Done()
-
-			// 获取信号量（阻塞直到有空位）
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			// 应用请求延迟
-			if rp.config.Delay > 0 {
-				time.Sleep(rp.config.Delay)
-			}
-
-			// 处理URL
-			response := rp.processURL(targetURL)
-
-			// 更新统计和收集响应
-			rp.updateProcessingStats(response, targetURL, responses, responsesMu, stats)
-
-			// 执行回调
-			if callback != nil && response != nil {
-				callback(response)
-			}
-		}(targetURL)
+// processURLsConcurrent 使用 worker pool 并发处理URL列表（支持 ctx 取消）
+func (rp *RequestProcessor) processURLsConcurrent(ctx context.Context, urls []string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats, callback func(*interfaces.HTTPResponse)) {
+	maxConcurrent := rp.config.MaxConcurrent
+	if maxConcurrent <= 0 {
+		maxConcurrent = 1
 	}
 
+	jobs := make(chan string)
+
+	var wg sync.WaitGroup
+	for i := 0; i < maxConcurrent; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case targetURL, ok := <-jobs:
+					if !ok {
+						return
+					}
+
+					// 应用请求延迟（可取消）
+					if rp.config.Delay > 0 {
+						if !sleepWithContext(ctx, rp.config.Delay) {
+							return
+						}
+					}
+
+					response := rp.processURLWithContext(ctx, targetURL)
+					rp.updateProcessingStats(response, targetURL, responses, responsesMu, stats)
+
+					if callback != nil && response != nil {
+						callback(response)
+					}
+				}
+			}
+		}()
+	}
+
+	// 派发任务：ctx 取消后停止继续投递
+	for _, u := range urls {
+		select {
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return
+		case jobs <- u:
+		}
+	}
+	close(jobs)
 	wg.Wait()
 }
 
-// processURL 处理单个URL
-func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
+func sleepWithContext(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	if ctx == nil {
+		time.Sleep(d)
+		return true
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
+// processURLWithContext 处理单个URL（可取消）
+func (rp *RequestProcessor) processURLWithContext(ctx context.Context, url string) *interfaces.HTTPResponse {
+	if ctx != nil {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+	}
+
 	var response *interfaces.HTTPResponse
 	var err error
-	
 
-	// 改进的重试逻辑（指数退避 + 抖动）
 	for attempt := 0; attempt <= rp.config.MaxRetries; attempt++ {
+		if ctx != nil {
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+			}
+		}
+
 		if attempt > 0 {
 			logger.Debug(fmt.Sprintf("重试 %d/%d: %s", attempt, rp.config.MaxRetries, url))
 		}
 
-		// 执行请求（httpclient内部处理重定向）
 		response, err = rp.makeRequest(url)
-
 		if err == nil {
 			return response
 		}
 
-		// 检查是否为可重试的错误
 		if !rp.isRetryableError(err) {
 			logger.Debugf("不可重试的错误，停止重试: %s, 错误: %v", url, err)
 			break
 		}
 
-		// 改进的重试延迟：指数退避 + 随机抖动
 		if attempt < rp.config.MaxRetries {
-			// 优化：目录扫描需要高性能，减少重试等待时间
-			// 原来是 1s, 2s, 4s... 对于扫描太慢了
-			// 改为：100ms, 200ms, 400ms...
 			baseDelay := time.Duration(100*(1<<uint(attempt))) * time.Millisecond
 			if baseDelay > 2*time.Second {
 				baseDelay = 2 * time.Second
 			}
 
-			jitter := time.Duration(rand.Intn(100)) * time.Millisecond // 减少抖动范围
+			jitter := time.Duration(rand.Intn(100)) * time.Millisecond
 			delay := baseDelay + jitter
 			logger.Debugf("重试延迟: %v (基础: %v, 抖动: %v)", delay, baseDelay, jitter)
-			time.Sleep(delay)
+
+			if !sleepWithContext(ctx, delay) {
+				return nil
+			}
 		}
 	}
 
-	logger.Debug(fmt.Sprintf("请求失败 (重试%d次): %s, 错误: %v",
-		rp.config.MaxRetries, url, err))
+	logger.Debug(fmt.Sprintf("请求失败 (重试%d次): %s, 错误: %v", rp.config.MaxRetries, url, err))
 	return nil
 }
 
@@ -355,7 +417,7 @@ func (rp *RequestProcessor) UpdateConfig(config *RequestConfig) {
 	defer rp.mu.Unlock()
 
 	rp.config = config
-	
+
 	clientConfig := &httpclient.Config{
 		Timeout:        config.Timeout,
 		FollowRedirect: config.FollowRedirect,

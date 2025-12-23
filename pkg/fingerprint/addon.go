@@ -1,3 +1,5 @@
+//go:build passive
+
 package fingerprint
 
 import (
@@ -51,7 +53,6 @@ func NewFingerprintAddon(engineConfig *EngineConfig) (*FingerprintAddon, error) 
 
 	return addon, nil
 }
-
 
 // Requestheaders 实现proxy.Addon接口，在请求头阶段添加防缓存头部
 func (fa *FingerprintAddon) Requestheaders(f *proxy.Flow) {
@@ -389,7 +390,7 @@ func (fa *FingerprintAddon) isHostAllowed(host string) bool {
 	}
 	// TODO: 实现更复杂的通配符匹配逻辑，目前简化为包含检查
 	// 这里为了解耦，暂时简化逻辑，实际生产中应该注入一个HostValidator接口
-	return true 
+	return true
 }
 
 // extractAndDecompressBody 提取并解压响应体

@@ -95,7 +95,7 @@ func Execute(rawURL string, fetcher HTTPFetcherFull, config *Config) (*interface
 			IsDirectory:     strings.HasSuffix(currentURL, "/"),
 			ContentType:     GetHeaderFirst(headers, "Content-Type"),
 		}
-		
+
 		titleExtractor := shared.NewTitleExtractor()
 		response.Title = titleExtractor.ExtractTitle(body)
 
@@ -242,26 +242,36 @@ func ResolveRedirectURL(baseRaw, ref string) string {
 		return ref
 	}
 	base, err := url.Parse(baseRaw)
-	if err != nil { return "" }
+	if err != nil {
+		return ""
+	}
 	if strings.HasPrefix(ref, "//") {
 		ref = base.Scheme + ":" + ref
 	}
 	u, err := url.Parse(ref)
-	if err != nil { return "" }
+	if err != nil {
+		return ""
+	}
 	return base.ResolveReference(u).String()
 }
 
 // ShouldFollowRedirect 判断是否应该跟随重定向（同主机/域名检查）
 func ShouldFollowRedirect(currentURL, nextURL string) bool {
 	u1, err := url.Parse(currentURL)
-	if err != nil { return false }
+	if err != nil {
+		return false
+	}
 	u2, err := url.Parse(nextURL)
-	if err != nil { return false }
+	if err != nil {
+		return false
+	}
 
 	h1 := strings.ToLower(u1.Hostname())
 	h2 := strings.ToLower(u2.Hostname())
 
-	if h1 == h2 { return true }
+	if h1 == h2 {
+		return true
+	}
 	if strings.HasSuffix(h2, "."+h1) || strings.HasSuffix(h1, "."+h2) {
 		return true
 	}

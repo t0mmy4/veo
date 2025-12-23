@@ -34,7 +34,7 @@ func FasthttpDialerFactory(proxyURL string, connectTimeout time.Duration) fastht
 			logger.Warnf("SOCKS5代理初始化失败: %v", err)
 			return nil
 		}
-		
+
 		logger.Debugf("Fasthttp使用SOCKS5代理: %s", proxyURL)
 		return func(addr string) (net.Conn, error) {
 			return dialer.Dial("tcp", addr)
@@ -47,7 +47,7 @@ func FasthttpDialerFactory(proxyURL string, connectTimeout time.Duration) fastht
 		if !strings.Contains(proxyAddr, ":") {
 			proxyAddr += ":80"
 		}
-		
+
 		// 处理代理认证
 		var authHeader string
 		if u.User != nil {
@@ -58,7 +58,7 @@ func FasthttpDialerFactory(proxyURL string, connectTimeout time.Duration) fastht
 		}
 
 		logger.Debugf("Fasthttp使用HTTP代理(CONNECT模式): %s", proxyURL)
-		
+
 		return func(addr string) (net.Conn, error) {
 			// 1. 连接到代理服务器
 			conn, err := net.DialTimeout("tcp", proxyAddr, connectTimeout)
@@ -114,7 +114,7 @@ func FasthttpDialerFactory(proxyURL string, connectTimeout time.Duration) fastht
 			// 对于 CONNECT 隧道，通常 200 OK 后才是数据流，所以大概率没问题。
 			// 为了稳健性，如果 reader.Buffered() > 0，我们需要处理它。
 			// 这里简单起见，暂不处理缓冲残留（假设代理标准实现），如果有问题需要实现 BufferedConn。
-			
+
 			if reader.Buffered() > 0 {
 				// 这是一个潜在风险点，但在 CONNECT 握手阶段通常还未传输数据
 				logger.Debugf("警告: 代理握手后缓冲区有残留数据 %d 字节", reader.Buffered())

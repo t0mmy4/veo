@@ -222,13 +222,13 @@ func (e *Engine) ScanExactURLs(urls []string) ([]*interfaces.HTTPResponse, error
 	}
 
 	logger.Debugf("执行精确URL扫描: %d 个", len(urls))
-	
+
 	// 直接调用 HTTP 请求执行逻辑
 	responses, err := e.performHTTPRequests(urls)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return responses, nil
 }
 

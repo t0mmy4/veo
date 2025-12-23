@@ -295,7 +295,7 @@ func (c *PathChecker) IsStaticPath(urlPath string) bool {
 	}
 
 	lowerPath := strings.ToLower(pathPart)
-	
+
 	for _, p := range c.paths {
 		// 检查路径中是否包含黑名单目录（例如 /assets/）
 		// 使用 contains 而不是 hasPrefix，因为可能是 /v1/assets/

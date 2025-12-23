@@ -1,3 +1,5 @@
+//go:build passive
+
 package cli
 
 import (
@@ -89,29 +91,15 @@ func (app *CLIApp) triggerScan() {
 
 	// 如果指定了 -o 输出路径，则在扫描结束后生成报告
 	if app.args.Output != "" {
-		scanParams := map[string]interface{}{
-			"threads":                   0,
-			"timeout":                   0,
-			"retry":                     0,
-			"dir_targets_count":         len(result.ScanURLs),
-			"fingerprint_targets_count": 0,
-			"fingerprint_rules_loaded":  0,
-		}
-
 		var fpEngine *fingerprint.Engine
 		if app.fingerprintAddon != nil {
 			fpEngine = app.fingerprintAddon.GetEngine()
-			if fpEngine != nil {
-				stats := fpEngine.GetStats()
-				scanParams["fingerprint_rules_loaded"] = stats.RulesLoaded
-			}
 		}
 
 		reportConfig := &ReportConfig{
 			Modules:                app.args.Modules,
 			OutputPath:             app.args.Output,
 			ShowFingerprintSnippet: app.args.VeryVerbose,
-			ScanParams:             scanParams,
 		}
 
 		var dirResults, fingerResults []interfaces.HTTPResponse

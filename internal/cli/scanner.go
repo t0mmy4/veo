@@ -34,22 +34,13 @@ func toValueSlice(pages []*interfaces.HTTPResponse) []interfaces.HTTPResponse {
 
 // toReporterStats 和 convertFingerprintMatches 已移动到 report.go 以实现共享
 
-// ScanMode 扫描模式
-type ScanMode int
-
-const (
-	ActiveMode ScanMode = iota
-	PassiveMode
-)
-
 // ScanController 扫描控制器
 type ScanController struct {
-	mode              ScanMode
 	args              *CLIArgs
 	config            *config.Config
 	requestProcessor  *requests.RequestProcessor
 	urlGenerator      *dirscan.URLGenerator
-	fingerprintEngine *fingerprint.Engine           // 指纹识别引擎
+	fingerprintEngine *fingerprint.Engine           // 指纹识别引擎（用于 finger 模块与 dirscan 二次识别）
 	encodingDetector  *fingerprint.EncodingDetector // 编码检测器
 	probedHosts       map[string]bool               // 已探测的主机缓存（用于path探测去重）
 	probedMutex       sync.RWMutex                  // 探测缓存锁
@@ -83,11 +74,6 @@ type ScanController struct {
 }
 
 func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
-	mode := ActiveMode
-	if args.Listen {
-		mode = PassiveMode
-	}
-
 	threads := args.Threads
 	if threads <= 0 {
 		threads = 200
@@ -118,29 +104,23 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 	logger.Debugf("请求处理器重试次数设置为: %d", requestConfig.MaxRetries)
 	logger.Debugf("请求处理器超时时间设置为: %v", requestConfig.Timeout)
 
+	// 初始化指纹引擎：
+	// - finger 模块需要它
+	// - dirscan 模块也会用它做二次识别（保持现有行为）
 	var fpEngine *fingerprint.Engine
-	if mode == ActiveMode {
-		globalAddon := fingerprint.GetGlobalAddon()
-		if globalAddon != nil {
-			fpEngine = globalAddon.GetEngine()
-			logger.Debug("复用被动模式的指纹引擎，避免重复加载")
-		}
-	}
-
-	if fpEngine == nil && args.HasModule(string(modulepkg.ModuleDirscan)) {
-		logger.Debug("检测到目录扫描模块启用，正在初始化指纹引擎以支持二次识别...")
-		addon, err := fingerprint.CreateDefaultAddon()
-		if err != nil {
-			logger.Warnf("初始化指纹引擎失败，目录扫描将不包含指纹信息: %v", err)
-		} else {
-			fpEngine = addon.GetEngine()
-			logger.Debug("指纹引擎初始化成功 (二次识别模式)")
+	if args.HasModule(string(modulepkg.ModuleFinger)) || args.HasModule(string(modulepkg.ModuleDirscan)) {
+		fpEngine = fingerprint.NewEngine(nil)
+		if fpEngine != nil {
+			if err := fpEngine.LoadRules(fpEngine.GetConfig().RulesPath); err != nil {
+				// 保持运行（避免 nil panic），但提示用户规则加载失败
+				logger.Warnf("加载指纹规则失败，指纹识别可能无结果: %v", err)
+			}
 		}
 	}
 
 	requestProcessor := requests.NewRequestProcessor(requestConfig)
 
-	if mode == ActiveMode && len(args.Modules) == 1 && args.Modules[0] == "finger" {
+	if len(args.Modules) == 1 && args.Modules[0] == "finger" {
 		requestProcessor.SetModuleContext("fingerprint")
 	}
 
@@ -177,7 +157,6 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 	}
 
 	sc := &ScanController{
-		mode:                   mode,
 		args:                   args,
 		config:                 cfg,
 		requestProcessor:       requestProcessor,
@@ -202,15 +181,7 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 }
 
 func (sc *ScanController) Run() error {
-	switch sc.mode {
-	case ActiveMode:
-		return sc.runActiveMode()
-	case PassiveMode:
-		logger.Info("启动被动代理模式")
-		return nil
-	default:
-		return fmt.Errorf("未知的扫描模式")
-	}
+	return sc.runActiveMode()
 }
 
 func (sc *ScanController) runActiveMode() error {
@@ -234,47 +205,28 @@ func (sc *ScanController) runActiveMode() error {
 		logger.Debugf("统计显示器：设置总主机数 = %d", len(targets))
 	}
 
-	var allResults []interfaces.HTTPResponse
-	var dirscanResults []interfaces.HTTPResponse
-	var fingerprintResults []interfaces.HTTPResponse
-
 	orderedModules := sc.getOptimizedModuleOrder()
 
-	// [新增] 信号处理：捕获Ctrl+C
+	// 信号处理：捕获 Ctrl+C / SIGTERM，通过 ctx 取消让各模块尽快收敛
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	// 使用done通道来同步扫描完成
-	done := make(chan struct{})
+	defer signal.Stop(sigChan)
 
 	go func() {
-		defer close(done)
-		// 传递context给executeModulesSequence，但这需要修改executeModulesSequence签名
-		// 或者，我们通过修改RequestProcessor的配置或状态来停止
-		// 更好的方式是重构executeModulesSequence以接受context，或者在此处简单地等待扫描完成
-		// 由于重构涉及多个文件，我们先保持现有逻辑，但在此处监听信号并手动调用报告生成
-		allResults, dirscanResults, fingerprintResults = sc.executeModulesSequenceWithContext(ctx, orderedModules, targets)
+		select {
+		case <-sigChan:
+			logger.Info("收到中断信号，正在停止...")
+			cancel()
+		case <-ctx.Done():
+			return
+		}
 	}()
 
-	select {
-	case <-done:
-		// 正常完成
-	case <-sigChan:
-		cancel() // 触发context取消
-
-		// 等待工作协程优雅退出并返回已收集的结果
-		// 给模块一点时间来响应取消信号并返回数据
-		logger.Info("Waiting for current tasks to complete...")
-		select {
-		case <-done:
-		case <-time.After(10 * time.Second):
-			logger.Warn("停止超时，强制保存现有结果 (部分数据可能丢失)")
-		}
-
-	}
+	// 同步执行：避免 goroutine 写结果、主流程读结果带来的数据竞争
+	allResults, dirscanResults, fingerprintResults := sc.executeModulesSequenceWithContext(ctx, orderedModules, targets)
 
 	return sc.finalizeScan(allResults, dirscanResults, fingerprintResults)
 }
@@ -464,4 +416,3 @@ func (sc *ScanController) runModuleForTargetsWithContext(ctx context.Context, mo
 		return nil, fmt.Errorf("不支持的模块: %s", moduleName)
 	}
 }
-

@@ -3141,3 +3141,8 @@ spring-gateway:
 华为防火墙:
   dsl:
   - "contains(body, 'UI_component/ctrl/Button.js','UI_component/ctrl/PanelSuperclass.js')"
+
+git泄露:
+  dsl:
+  - "contains_all(body, 'core','branch')"
+  - "contains(body, 'logallrefupdates','repositoryformatversion','refs/heads/master')"

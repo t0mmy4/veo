@@ -18,12 +18,12 @@ import (
 func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string) ([]interfaces.HTTPResponse, error) {
 	originalContext := sc.requestProcessor.GetModuleContext()
 	sc.requestProcessor.SetModuleContext("dirscan")
-	
+
 	// [修复] 开启批量模式，确保递归扫描时 TotalRequests 正确累加而不是重置
 	// 避免出现 Requests: 4000/2000 (200%) 的情况
 	originalBatchMode := sc.requestProcessor.IsBatchMode()
 	sc.requestProcessor.SetBatchMode(true)
-	
+
 	defer func() {
 		sc.requestProcessor.SetModuleContext(originalContext)
 		sc.requestProcessor.SetBatchMode(originalBatchMode)
@@ -68,7 +68,7 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 			return nil
 		default:
 		}
-		responses := sc.requestProcessor.ProcessURLs(urls)
+		responses := sc.requestProcessor.ProcessURLsWithContext(ctx, urls)
 		var result []interfaces.HTTPResponse
 		for _, r := range responses {
 			if r != nil {
@@ -127,7 +127,7 @@ func (sc *ScanController) runConcurrentDirscan(ctx context.Context, targets []st
 	// 执行并发扫描
 	// 注意：虽然 ExecuteConcurrentScan 返回所有原始结果，但我们已经在回调中处理了有效结果
 	_, err := scheduler.ExecuteConcurrentScan()
-	
+
 	// 关闭打印通道并等待打印完成
 	close(printChan)
 	printWg.Wait()
@@ -165,7 +165,7 @@ func (sc *ScanController) runSequentialDirscan(ctx context.Context, targets []st
 		// 生成扫描URL
 		scanURLs := sc.generateDirscanURLs(target, recursive)
 		logger.Debugf("为 %s 生成了 %d 个扫描URL", target, len(scanURLs))
-		
+
 		// [调试] 打印生成的URL示例（前5个）
 		if len(scanURLs) > 0 {
 			count := 5
@@ -179,8 +179,8 @@ func (sc *ScanController) runSequentialDirscan(ctx context.Context, targets []st
 		}
 
 		// 发起HTTP请求（实时处理）
-		// 使用 ProcessURLsWithCallback 替代 ProcessURLs
-		sc.requestProcessor.ProcessURLsWithCallback(scanURLs, func(resp *interfaces.HTTPResponse) {
+		// 使用支持 ctx 的版本，确保 Ctrl+C 能尽快停止当前目标的剩余URL派发
+		sc.requestProcessor.ProcessURLsWithCallbackWithContext(ctx, scanURLs, func(resp *interfaces.HTTPResponse) {
 			sc.handleRealTimeResult(ctx, target, resp, filter, &allResults, nil, printChan)
 		})
 
@@ -249,7 +249,7 @@ func (sc *ScanController) handleRealTimeResult(ctx context.Context, target strin
 		if mu != nil {
 			mu.Lock()
 		}
-		
+
 		for i := range validPages {
 			page := validPages[i] // 获取指针
 			if page == nil {
@@ -258,13 +258,13 @@ func (sc *ScanController) handleRealTimeResult(ctx context.Context, target strin
 			// 添加到结果集（由于 validPages 是指针切片，我们需要解引用来存储值，或者修改 results 类型）
 			// 这里 results 是 []interfaces.HTTPResponse (值切片)，为了兼容现有代码结构
 			*results = append(*results, *page)
-			
+
 			// 发送到打印通道
 			if printChan != nil {
 				printChan <- page
 			}
 		}
-		
+
 		if mu != nil {
 			mu.Unlock()
 		}
@@ -274,7 +274,7 @@ func (sc *ScanController) handleRealTimeResult(ctx context.Context, target strin
 // startResultPrinter 启动结果打印协程
 func (sc *ScanController) startResultPrinter(printChan <-chan *interfaces.HTTPResponse, wg *sync.WaitGroup, filter *dirscan.ResponseFilter) {
 	defer wg.Done()
-	
+
 	for page := range printChan {
 		if page == nil {
 			continue
@@ -297,7 +297,7 @@ func (sc *ScanController) printSingleValidPage(page *interfaces.HTTPResponse, fi
 		for i := range matches {
 			matchPtrs[i] = &matches[i]
 		}
-		
+
 		// 暂时还需要访问 filter 获取显示配置，理想情况这应该在 Printer 配置中
 		// 但为了最小化改动，我们这里还是复用 filter 的方法，只是逻辑在外部控制
 		// 注意：formatFingerprintMatches 是私有方法，我们需要在 filter.go 中公开它或者复制逻辑

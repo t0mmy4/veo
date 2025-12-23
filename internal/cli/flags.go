@@ -1,3 +1,5 @@
+//go:build passive
+
 package cli
 
 import (
@@ -18,6 +20,7 @@ import (
 	"veo/pkg/utils/logger"
 	"veo/pkg/utils/shared"
 )
+
 type arrayFlags []string
 
 func (af *arrayFlags) String() string {
@@ -81,7 +84,6 @@ type CLIArgs struct {
 
 // ValidModules 有效的模块列表（使用module包的类型定义）
 var ValidModules = []string{string(modulepkg.ModuleFinger), string(modulepkg.ModuleDirscan)}
-
 
 // ParseCLIArgs 解析命令行参数
 func ParseCLIArgs() *CLIArgs {
@@ -483,7 +485,6 @@ func (args *CLIArgs) GetModulesString() string {
 	return strings.Join(args.Modules, ",")
 }
 
-
 // ApplyArgsToConfig 将CLI参数应用到配置系统（导出用于测试）
 func ApplyArgsToConfig(args *CLIArgs) {
 	applyArgsToConfig(args)
@@ -622,7 +623,7 @@ func applyArgsToConfig(args *CLIArgs) {
 	}
 
 	// 应用输出文件路径
-	
+
 	// 应用静态资源黑名单配置（从收集器配置中获取）
 	// 这将被用于递归目录扫描中的静态文件过滤
 	if collectorCfg := config.GetCollectorConfig(); collectorCfg != nil {
@@ -665,7 +666,6 @@ func handleRuleUpdates(args *CLIArgs) {
 		logger.Debugf("指纹库已是最新版本: %s", localVer)
 	}
 }
-
 
 func parseHeaderFlags(headers []string) (map[string]string, error) {
 	parsed := make(map[string]string)

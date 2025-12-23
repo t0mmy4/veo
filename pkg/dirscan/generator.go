@@ -160,7 +160,7 @@ func (ug *URLGenerator) generateURLsForBase(baseURL string, recursive bool) {
 		} else {
 			basePath = ""
 		}
-		
+
 		commonDict := ug.dictManager.GetCommonDictionary()
 		ug.generateURLsFromDictionary(components, basePath, commonDict, "通用字典(递归)")
 	} else {

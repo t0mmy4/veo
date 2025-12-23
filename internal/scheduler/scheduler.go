@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 	"veo/internal/core/config"
+	"veo/pkg/dirscan"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
-	"veo/pkg/dirscan"
 	processor "veo/pkg/utils/processor"
 )
 
@@ -22,10 +22,10 @@ type TargetScheduler struct {
 	resultsMu              sync.RWMutex
 	ctx                    context.Context
 	cancel                 context.CancelFunc
-	baseRequestProcessor   *processor.RequestProcessor // 基础请求处理器（支持统计更新）
-	recursive              bool                        // 是否递归模式
+	baseRequestProcessor   *processor.RequestProcessor            // 基础请求处理器（支持统计更新）
+	recursive              bool                                   // 是否递归模式
 	resultCallback         func(string, *interfaces.HTTPResponse) // 结果回调
-	requestTimeout         time.Duration               // 单次请求超时时间
+	requestTimeout         time.Duration                          // 单次请求超时时间
 }
 
 // TargetWorker 目标工作器
@@ -292,14 +292,14 @@ func (ts *TargetScheduler) createTargetWorker(id int, target string) *TargetWork
 	if ts.baseRequestProcessor != nil {
 		// CloneWithContext 内部会复制 Config，所以我们可以安全地修改 Clone 后的 Config
 		requestProcessor = ts.baseRequestProcessor.CloneWithContext(moduleCtx, timeout)
-		
+
 		// [关键修复] 更新MaxConcurrent为计算出的每目标并发数
 		// 之前这里使用了全局MaxConcurrent，导致 总并发 = TargetWorkers * GlobalMaxConcurrent，引发并发爆炸
 		// 现在的 CloneWithContext 已经创建了独立的 Config 副本，可以直接修改
 		requestConfig := requestProcessor.GetConfig()
 		requestConfig.MaxConcurrent = ts.urlConcurrentPerTarget
 		// 注意：不要调用 UpdateConfig，因为它会重建 Client。我们只想改变调度层的并发限制。
-		
+
 		logger.Debugf("复用BaseRequestProcessor创建Worker: %s (并发限制: %d)", moduleCtx, ts.urlConcurrentPerTarget)
 	} else {
 		// 回退模式：创建新的处理器（通常不应发生，因为Controller会设置Base）
@@ -365,14 +365,14 @@ func (tw *TargetWorker) executeRequestsWithTimeout(ctx context.Context, urls []s
 
 		var responses []*interfaces.HTTPResponse
 		if tw.resultCallback != nil {
-			// 如果有回调，使用 ProcessURLsWithCallback
+			// 如果有回调，使用支持 ctx 的版本，确保取消后不再继续派发剩余URL
 			// [内存优化] 使用回调时，不需要向上层返回所有原始响应，避免内存积压
-			tw.requestProcessor.ProcessURLsWithCallback(urls, func(resp *interfaces.HTTPResponse) {
+			tw.requestProcessor.ProcessURLsWithCallbackWithContext(requestCtx, urls, func(resp *interfaces.HTTPResponse) {
 				tw.resultCallback(tw.target, resp)
 			})
 			responses = []*interfaces.HTTPResponse{} // 返回空切片
 		} else {
-			responses = tw.requestProcessor.ProcessURLs(urls)
+			responses = tw.requestProcessor.ProcessURLsWithContext(requestCtx, urls)
 		}
 		resultChan <- responses
 	}()

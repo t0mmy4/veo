@@ -10,10 +10,10 @@ import (
 
 // URLCleaner 负责URL的清理、规范化和参数过滤
 type URLCleaner struct {
-	staticExtensions []string
-	staticPaths      []string
-	invalidParams    map[string]bool
-	authParams       map[string]bool
+	staticExtensions  []string
+	staticPaths       []string
+	invalidParams     map[string]bool
+	authParams        map[string]bool
 	timestampPatterns []string
 }
 
@@ -79,12 +79,12 @@ func (c *URLCleaner) IsStaticResource(rawURL string) bool {
 	//    return checker.IsStaticFile(lowerURL)
 	// }
 	// extensions 参数被忽略了。
-	
+
 	if checker.IsStaticFile(lowerURL) {
 		logger.Debugf("匹配静态扩展名，过滤: %s", rawURL)
 		return true
 	}
-	
+
 	// 如果我们要支持自定义扩展名：
 	for _, ext := range c.staticExtensions {
 		if strings.HasSuffix(lowerURL, strings.ToLower(ext)) {
@@ -122,7 +122,7 @@ func (c *URLCleaner) CleanURLParams(rawURL string) string {
 			validParams[key] = values
 		}
 	}
-	
+
 	if len(validParams) == 0 {
 		parsedURL.RawQuery = ""
 	} else {
@@ -137,7 +137,7 @@ func (c *URLCleaner) validateAndFixURL(rawURL string) (bool, string) {
 	if rawURL == "" {
 		return false, ""
 	}
-	
+
 	fixedURL := rawURL
 	// 修复协议相对URL
 	if strings.HasPrefix(rawURL, "//") {
@@ -145,7 +145,7 @@ func (c *URLCleaner) validateAndFixURL(rawURL string) (bool, string) {
 		if hostAndPath == "" {
 			return false, ""
 		}
-		
+
 		// 简单启发式：有443端口则https，否则http
 		if strings.Contains(hostAndPath, ":443") {
 			// 移除 :443 并加 https
@@ -165,24 +165,26 @@ func (c *URLCleaner) validateAndFixURL(rawURL string) (bool, string) {
 	return true, fixedURL
 }
 
-
 func (c *URLCleaner) cleanPathID(u *url.URL) bool {
 	path := strings.TrimRight(u.Path, "/")
 	idx := strings.LastIndex(path, "/")
 	if idx == -1 {
 		return false
 	}
-	
+
 	segment := path[idx+1:]
 	// 检查是否纯数字
 	isNumeric := true
-	if segment == "" { isNumeric = false }
+	if segment == "" {
+		isNumeric = false
+	}
 	for _, r := range segment {
 		if r < '0' || r > '9' {
-			isNumeric = false; break
+			isNumeric = false
+			break
 		}
 	}
-	
+
 	if isNumeric {
 		u.Path = path[:idx]
 		return true
@@ -192,9 +194,13 @@ func (c *URLCleaner) cleanPathID(u *url.URL) bool {
 
 func (c *URLCleaner) isValidParam(key string, values []string) bool {
 	lowerKey := strings.ToLower(key)
-	if c.invalidParams[lowerKey] { return false }
-	if c.authParams[lowerKey] { return true }
-	
+	if c.invalidParams[lowerKey] {
+		return false
+	}
+	if c.authParams[lowerKey] {
+		return true
+	}
+
 	// 检查值是否像时间戳
 	for _, v := range values {
 		for _, p := range c.timestampPatterns {

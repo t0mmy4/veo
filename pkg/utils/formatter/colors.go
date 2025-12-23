@@ -464,4 +464,3 @@ func HighlightSnippet(snippet, matcher string) string {
 	}
 	return highlighted
 }
-

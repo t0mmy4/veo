@@ -1,3 +1,5 @@
+//go:build passive
+
 package proxy
 
 import (
@@ -9,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
 	"veo/pkg/utils/logger"
 	"veo/pkg/utils/network"
 
