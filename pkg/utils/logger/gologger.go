@@ -65,11 +65,6 @@ func InitializeLogger(config *LogConfig) error {
 	return nil
 }
 
-// InitializeLogging 兼容原有的初始化函数名
-func InitializeLogging(config *LogConfig) error {
-	return InitializeLogger(config)
-}
-
 func getDefaultLogConfig() *LogConfig {
 	return &LogConfig{Level: "info", ColorOutput: true}
 }

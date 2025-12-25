@@ -4,10 +4,8 @@ package cli
 
 import (
 	"fmt"
-	"runtime"
 
 	"veo/internal/core/config"
-	"veo/pkg/utils/formatter"
 	"veo/pkg/utils/logger"
 )
 
@@ -29,13 +27,6 @@ func Execute() {
 		logger.InitializeLogger(nil)
 	}
 	logger.Debug("日志系统初始化完成")
-
-	// 初始化formatter包的Windows ANSI支持
-	// Windows 10+默认支持ANSI颜色
-	if runtime.GOOS == "windows" {
-		formatter.SetWindowsANSISupported(true)
-		logger.Debug("Windows ANSI颜色支持已启用")
-	}
 
 	// 解析命令行参数
 	args := ParseCLIArgs()

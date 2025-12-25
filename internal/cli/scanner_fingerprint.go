@@ -39,10 +39,6 @@ func (sc *ScanController) runFingerprintModuleWithContext(ctx context.Context, t
 	return sc.runConcurrentFingerprintWithContext(ctx, targets)
 }
 
-func (sc *ScanController) runFingerprintModule(targets []string) ([]interfaces.HTTPResponse, error) {
-	return sc.runFingerprintModuleWithContext(context.Background(), targets)
-}
-
 func (sc *ScanController) runConcurrentFingerprintWithContext(parentCtx context.Context, targets []string) ([]interfaces.HTTPResponse, error) {
 	logger.Debugf("并发指纹识别模式，数量: %d", len(targets))
 
@@ -175,10 +171,6 @@ func (sc *ScanController) runConcurrentFingerprintWithContext(parentCtx context.
 	}
 
 	return allResults, nil
-}
-
-func (sc *ScanController) runConcurrentFingerprint(targets []string) ([]interfaces.HTTPResponse, error) {
-	return sc.runConcurrentFingerprintWithContext(context.Background(), targets)
 }
 
 // processSingleTargetFingerprintWithContext 处理单个目标，支持传入 Context

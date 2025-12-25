@@ -48,20 +48,8 @@ type Engine struct {
 	config           *EngineConfig
 	stats            *Statistics
 	mu               sync.RWMutex
-	lastScanResult   *ScanResult
-	filterConfig     *FilterConfig
 	requestProcessor *requests.RequestProcessor
 }
-
-// ScanStatus 扫描状态
-type ScanStatus int
-
-const (
-	StatusIdle     ScanStatus = iota // 空闲状态
-	StatusScanning                   // 扫描中
-	StatusPaused                     // 暂停状态
-	StatusError                      // 错误状态
-)
 
 // 默认配置
 

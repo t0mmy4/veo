@@ -32,8 +32,6 @@ func toValueSlice(pages []*interfaces.HTTPResponse) []interfaces.HTTPResponse {
 	return result
 }
 
-// toReporterStats 和 convertFingerprintMatches 已移动到 report.go 以实现共享
-
 // ScanController 扫描控制器
 type ScanController struct {
 	args              *CLIArgs
@@ -252,10 +250,6 @@ func (sc *ScanController) executeModulesSequenceWithContext(ctx context.Context,
 
 		logger.Debugf("开始执行模块: %s (%d/%d)", moduleName, i+1, len(modules))
 
-		// 注意：这里需要确保 runModuleForTargets 能够响应中断或快速返回
-		// 目前 runModuleForTargets 内部没有完全传递 ctx，但我们已经在 scanner_fingerprint.go 中优化了超时
-		// 下一步优化应该是将 ctx 传递给 runModuleForTargets
-		// 临时方案：如果模块执行期间被中断，结果可能不完整，但我们会保存已有的
 		moduleResults, err := sc.runModuleForTargetsWithContext(ctx, moduleName, targets)
 		if err != nil {
 			logger.Errorf("模块 %s 执行失败: %v", moduleName, err)
@@ -277,10 +271,6 @@ func (sc *ScanController) executeModulesSequenceWithContext(ctx context.Context,
 	}
 
 	return allResults, dirResults, fingerprintResults
-}
-
-func (sc *ScanController) GetRequestProcessor() *requests.RequestProcessor {
-	return sc.requestProcessor
 }
 
 func (sc *ScanController) finalizeScan(allResults, dirResults, fingerprintResults []interfaces.HTTPResponse) error {
@@ -387,29 +377,6 @@ func (sc *ScanController) runModuleForTargetsWithContext(ctx context.Context, mo
 		// 目录扫描集成 Context
 		return sc.runDirscanModule(ctx, targets)
 	case "finger":
-		// 指纹模块已经部分集成了 Context (通过 runConcurrentFingerprint)
-		// 但我们需要确保它能感知到外部的 ctx 取消
-		// 由于 runFingerprintModule 签名未变，我们这里做一些特定的处理
-
-		// 如果是指纹模块，我们使用一个能够感知 context 的 wrapper
-		// 注意：runConcurrentFingerprint 内部创建了自己的 context，这不理想
-		// 下一步优化：修改 runFingerprintModule 接受 context
-		// 临时方案：我们依靠 runActiveMode 中的 cancel() 来停止 RequestProcessor (如果它支持的话)
-		// 或者，我们修改 runConcurrentFingerprint 来接受外部 context (需要改动 scanner_fingerprint.go)
-
-		// 实际上，scanner_fingerprint.go 中的 runConcurrentFingerprint 创建了一个 WithCancel(context.Background())
-		// 我们无法直接注入 ctx，除非修改签名。
-		// 为了最小化改动，我们假设 runFingerprintModule 会因为 RequestProcessor 被停止或超时而返回
-
-		// 但为了更好的效果，我们将在此处修改 runFingerprintModule 的逻辑（通过 channel 或修改方法）
-		// 由于不能轻易修改接口，我们先调用原方法。
-		// 实际上，我们在 runActiveMode 中 cancel() 了 ctx，但这并没有传递进去。
-
-		// [修正] 我们需要修改 runFingerprintModule 及其调用的 runConcurrentFingerprint 来支持 Context
-		// 由于这涉及多个文件修改，我们将在此处先调用原始方法，
-		// 但依赖于 RequestProcessor 或其他组件的全局停止（如果实现了的话）。
-		// 更好的做法是：修改 runFingerprintModule 签名。
-		// 鉴于这是一个 "fix" 任务，我们在此处引入 runFingerprintModuleWithContext
 		return sc.runFingerprintModuleWithContext(ctx, targets)
 
 	default:

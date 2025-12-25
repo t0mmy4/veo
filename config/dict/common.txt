@@ -330,7 +330,6 @@
 /oauth/error/actuator/system/env
 /oauth/refresh/token/api/doc
 /oauth/token/actuator/system/mappings
-
 /prometheus
 /rails/info
 /refresh
@@ -501,6 +500,8 @@
 /v3/api-docs;.js
 
 # 3. 组件路径
+/arcgis/
+/arcgis/tokens/generateToken
 /ejbserver/ejb
 /nacosconfig?aa=bbbb
 /druid

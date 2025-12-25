@@ -10,7 +10,6 @@ import (
 	"veo/pkg/fingerprint"
 	report "veo/pkg/reporter"
 	"veo/pkg/types"
-	"veo/pkg/utils/formatter"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
 )
@@ -59,12 +58,7 @@ func generateCustomReport(config *ReportConfig, dirResults, fingerprintResults [
 
 		// 确保指纹结果列表不为空（如果只有dirscan结果，filterResult中可能包含所有）
 		if len(fingerprintResults) == 0 && hasModule(config.Modules, string(modulepkg.ModuleFinger)) {
-			// Convert pointer slice to value slice
-			for _, p := range filterResult.ValidPages {
-				if p != nil {
-					fingerprintResults = append(fingerprintResults, *p)
-				}
-			}
+			fingerprintResults = append(fingerprintResults, toValueSlice(filterResult.ValidPages)...)
 		}
 
 		jsonStr, err := report.GenerateCombinedJSON(dirResults, fingerprintResults, matches)
@@ -125,11 +119,6 @@ func hasModule(modules []string, module string) bool {
 	return false
 }
 
-// 辅助转换函数 (复用 scanner.go 中的逻辑，为了避免循环依赖，这里重新定义或需要 scanner.go 导出)
-// 由于 scanner.go 是 main package 的一部分 (internal/cli)，可以直接在这里使用
-// 但 convertFingerprintMatches 目前是 ScanController 的未导出方法或独立函数
-// 我们需要确保这些辅助函数可用
-
 func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch, includeSnippet bool) []types.FingerprintMatch {
 	if len(matches) == 0 {
 		return nil
@@ -154,9 +143,4 @@ func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch, includeS
 	}
 
 	return converted
-}
-
-// FormatFingerprintDisplay 包装 formatter
-func FormatFingerprintDisplay(name, rule string, showRule bool) string {
-	return formatter.FormatFingerprintDisplay(name, rule, showRule)
 }

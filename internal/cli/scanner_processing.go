@@ -11,7 +11,6 @@ import (
 	"veo/pkg/fingerprint"
 	report "veo/pkg/reporter"
 	"veo/pkg/types"
-	"veo/pkg/utils/formatter"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
 	sharedutils "veo/pkg/utils/shared"
@@ -234,36 +233,6 @@ func (sc *ScanController) extractTitleFromHTML(body string) string {
 	return sharedutils.ExtractTitle(body)
 }
 
-func (sc *ScanController) formatFingerprintDisplay(name, rule string) string {
-	return formatter.FormatFingerprintDisplay(name, rule, sc.showFingerprintRule)
-}
-
-func (sc *ScanController) highlightSnippetLines(snippet, matcher string) []string {
-	if snippet == "" {
-		return nil
-	}
-	snippet = strings.ReplaceAll(snippet, "\r\n", "\n")
-	snippet = strings.ReplaceAll(snippet, "\r", "\n")
-	rawLines := strings.Split(snippet, "\n")
-	var lines []string
-	for _, raw := range rawLines {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		highlighted := formatter.HighlightSnippet(raw, matcher)
-		if highlighted != "" {
-			lines = append(lines, highlighted)
-		}
-	}
-	if len(lines) == 0 {
-		if highlighted := formatter.HighlightSnippet(strings.TrimSpace(snippet), matcher); highlighted != "" {
-			lines = append(lines, highlighted)
-		}
-	}
-	return lines
-}
-
 // extractBaseURL 从完整URL中提取基础URL（协议+主机）
 func (sc *ScanController) extractBaseURL(rawURL string) string {
 	if parsedURL, err := url.Parse(rawURL); err == nil {
@@ -284,14 +253,6 @@ func (sc *ScanController) extractBaseURLWithPath(rawURL string) string {
 			path = "/" // 理论上Parse不会返回空path如果只是host，但为了保险
 		}
 		return fmt.Sprintf("%s://%s%s", parsedURL.Scheme, parsedURL.Host, path)
-	}
-	return rawURL
-}
-
-// extractHostKey 提取主机键（用于探测缓存）
-func (sc *ScanController) extractHostKey(rawURL string) string {
-	if parsedURL, err := url.Parse(rawURL); err == nil {
-		return parsedURL.Host // 包含端口的主机名
 	}
 	return rawURL
 }

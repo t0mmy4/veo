@@ -2,7 +2,6 @@ package processor
 
 import (
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -36,57 +35,15 @@ func (rp *RequestProcessor) getDefaultHeaders() map[string]string {
 	return headers
 }
 
-// getAuthHeaders 获取认证头部（CLI自定义头部优先，否则使用自动检测的头部）
 func (rp *RequestProcessor) getAuthHeaders() map[string]string {
 	rp.mu.RLock()
 	defer rp.mu.RUnlock()
 
-	authHeaders := make(map[string]string)
-
-	// 优先使用CLI指定的自定义头部
-	if len(rp.customHeaders) > 0 {
-		for key, value := range rp.customHeaders {
-			authHeaders[key] = value
-		}
-		return authHeaders
+	authHeaders := make(map[string]string, len(rp.customHeaders))
+	for key, value := range rp.customHeaders {
+		authHeaders[key] = value
 	}
-
-	// 如果没有自定义头部，使用自动检测的头部
-	if rp.authDetector.IsEnabled() && rp.authDetector.HasDetectedSchemes() {
-		detectedHeaders := rp.authDetector.GetDetectedSchemes()
-		for key, value := range detectedHeaders {
-			if value != "" { // 只使用有值的头部
-				authHeaders[key] = value
-			}
-		}
-	}
-
 	return authHeaders
-}
-
-// handleAuthDetection 处理认证检测（仅在未设置自定义头部时）
-func (rp *RequestProcessor) handleAuthDetection(statusCode int, headers map[string][]string, url string) {
-	// 如果设置了自定义头部，跳过自动检测
-	if rp.HasCustomHeaders() {
-		return
-	}
-
-	// 只处理401和403响应
-	if statusCode != 401 && statusCode != 403 {
-		return
-	}
-
-	// 构造临时http.Response以便认证检测器使用
-	httpResp := &http.Response{
-		StatusCode: statusCode,
-		Header:     http.Header(headers),
-	}
-
-	// 执行认证检测
-	detectedHeaders := rp.authDetector.DetectAuthRequirements(httpResp, url)
-	if len(detectedHeaders) > 0 {
-		logger.Debugf("检测到认证要求，将应用到后续请求: %s", url)
-	}
 }
 
 // ============================================================================
@@ -163,9 +120,6 @@ func (rp *RequestProcessor) processResponse(url string, statusCode int, body str
 		Depth:           0, // 深度信息需要外部设置
 		ResponseBody:    finalBody,
 	}
-
-	// 处理认证检测
-	rp.handleAuthDetection(statusCode, responseHeaders, url)
 
 	// 记录处理完成日志
 	logger.Debug(fmt.Sprintf("响应处理完成: %s [%d] %s, 响应头数量: %d, 耗时: %dms",

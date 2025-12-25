@@ -3,7 +3,6 @@ package formatter
 import (
 	"fmt"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync/atomic"
 )
@@ -40,14 +39,6 @@ const (
 	ColorTagHighlight         = "\033[38;2;255;33;33m"
 	ColorTagHighlightFallback = "\033[31m"
 )
-
-// FormatProtocol 格式化协议显示（加粗绿色）
-func FormatProtocol(proto string) string {
-	if !shouldUseColors() {
-		return fmt.Sprintf("[%s]", proto)
-	}
-	return fmt.Sprintf("%s%s[%s]%s", ColorBold, ColorGreen, proto, ColorReset)
-}
 
 // FormatURL 格式化URL显示（使用深绿色，右侧填充对齐）
 func FormatURL(url string) string {
@@ -137,25 +128,6 @@ func FormatFingerprintTitle(title string) string {
 	}
 	// 使用统一青色显示匹配标题
 	return getFingerprintTitleColor() + finalTitle + ColorReset
-}
-
-// FormatNumber 格式化数字显示（移除颜色，使用默认颜色）
-func FormatNumber(num int) string {
-	// 修改：数字使用默认颜色，不添加任何颜色
-	return fmt.Sprintf("%d", num)
-}
-
-// FormatPercentage 格式化百分比显示（移除颜色，使用默认颜色）
-func FormatPercentage(percentage float64) string {
-	// 修改：百分比使用默认颜色，不添加任何颜色
-	return fmt.Sprintf("%.1f%%", percentage)
-}
-
-// FormatResultNumber 格式化结果编号显示（已废弃：不再使用序号显示）
-// Deprecated: 根据新的日志输出要求，不再显示序号
-func FormatResultNumber(number int) string {
-	// 返回空字符串，因为不再使用序号显示
-	return ""
 }
 
 // FormatContentLength 格式化内容长度显示
@@ -257,19 +229,6 @@ func FormatFingerprintTag(tag string) string {
 	return color + display + ColorReset
 }
 
-// FormatBold 将文本加粗显示（若启用颜色）
-// 参数：
-//   - s: 原始文本
-//
-// 返回：
-//   - string: 加粗后的文本（或原文本，当颜色禁用时）
-func FormatBold(s string) string {
-	if !shouldUseColors() {
-		return s
-	}
-	return ColorBold + s + ColorReset
-}
-
 // FormatSnippetArrow 返回用于指纹匹配片段前缀的箭头（加粗绿色高亮）
 // 示例："➜ "（带尾随空格）
 // 参数：无
@@ -282,53 +241,12 @@ func FormatSnippetArrow() string {
 	return ColorBold + ColorGreen + arrow + ColorReset
 }
 
-// FormatFingerprintMatch 已废弃：统一使用FormatFingerprintName函数
-// Deprecated: 为了保持主动扫描和被动扫描的输出格式一致，
-// 现在统一使用FormatFingerprintName函数，该函数提供加粗显示效果
-// 此函数保留仅为向后兼容，实际调用FormatFingerprintName
 // shouldUseColors 检查是否应该使用颜色
-// 返回: 布尔值表示是否使用颜色（配置允许且平台支持）
 func shouldUseColors() bool {
-	if atomic.LoadInt32(&globalColorEnabled) == 0 {
-		return false
-	}
-	// Windows系统检查ANSI支持状态
-	if runtime.GOOS == "windows" {
-		return isWindowsANSISupported()
-	}
-
-	// 其他系统直接使用
-	return true
+	return atomic.LoadInt32(&globalColorEnabled) == 1
 }
 
-// isWindowsANSISupported 检查Windows是否支持ANSI颜色
-// 这个函数通过反射的方式避免导入循环依赖
-// 返回: 布尔值表示Windows ANSI支持状态
-func isWindowsANSISupported() bool {
-	// 为了避免循环导入，我们使用一个全局变量来获取状态
-	// 这个变量将在console包初始化时设置
-	return getWindowsANSIStatus()
-}
-
-// Windows ANSI状态变量，由console包设置
-var (
-	windowsANSISupported bool
-	globalColorEnabled   int32 = 1
-)
-
-// SetWindowsANSISupported 设置Windows ANSI支持状态
-// 此函数由console包调用，用于通知formatter包Windows ANSI支持状态
-// 参数 supported: Windows ANSI支持状态
-func SetWindowsANSISupported(supported bool) {
-	windowsANSISupported = supported
-}
-
-// getWindowsANSIStatus 获取Windows ANSI支持状态
-// 内部函数，返回由console包设置的ANSI支持状态
-// 返回: Windows ANSI支持状态
-func getWindowsANSIStatus() bool {
-	return windowsANSISupported
-}
+var globalColorEnabled int32 = 1
 
 // SetColorEnabled 控制全局颜色输出
 func SetColorEnabled(enabled bool) {
@@ -348,21 +266,9 @@ func ColorsEnabled() bool {
 // 返回适合当前终端环境的品牌绿色ANSI代码
 func getBrandGreenColor() string {
 	if !shouldUseColors() {
-		return "" // 如果禁用彩色输出，返回空字符串
+		return ""
 	}
-
-	// 临时修复：强制使用16色降级方案，绕过24位真彩色问题
-	// TODO: 调试完成后恢复24位真彩色检测逻辑
 	return ColorBrandGreenFallback
-
-	// 原始逻辑（临时注释）：
-	// // 检查是否支持24位真彩色
-	// if supportsTrueColor() {
-	// 	return ColorBrandGreen // 使用24位真彩色
-	// }
-	//
-	// // 降级到16色方案
-	// return ColorBrandGreenFallback
 }
 
 // getFingerprintColor 获取指纹名称专用颜色代码（支持降级）
@@ -371,12 +277,6 @@ func getFingerprintColor() string {
 		return ""
 	}
 	return ColorFingerprintCyanFallback
-
-	// 原始逻辑预留：
-	// if supportsTrueColor() {
-	// 	return ColorFingerprintCyan
-	// }
-	// return ColorFingerprintCyanFallback
 }
 
 // getFingerprintTitleColor 获取指纹匹配标题颜色（支持降级）
@@ -385,12 +285,6 @@ func getFingerprintTitleColor() string {
 		return ""
 	}
 	return ColorFingerprintTitleCyanFallback
-
-	// 原始逻辑预留：
-	// if supportsTrueColor() {
-	// 	return ColorFingerprintTitleCyan
-	// }
-	// return ColorFingerprintTitleCyanFallback
 }
 
 // getTagHighlightColor 获取标签高亮颜色（支持降级）
@@ -399,34 +293,11 @@ func getTagHighlightColor() string {
 		return ""
 	}
 	return ColorTagHighlightFallback
-
-	// 如需启用真彩色，可恢复以下逻辑：
-	// if supportsTrueColor() {
-	//     return ColorTagHighlight
-	// }
-	// return ColorTagHighlightFallback
 }
 
 // ============================================================================
 // 目录扫描指纹识别专用格式化函数
 // ============================================================================
-
-// FormatDSL 格式化DSL表达式（用于目录扫描结果的DSL显示）
-// 使用灰色显示DSL表达式，并截断过长的内容
-func FormatDSL(dsl string) string {
-	// 截断过长的DSL表达式
-	maxLen := 80
-	if len(dsl) > maxLen {
-		dsl = dsl[:maxLen] + "..."
-	}
-
-	if !shouldUseColors() {
-		return dsl // 如果禁用彩色输出，直接返回DSL表达式
-	}
-	// 使用灰色显示DSL表达式
-	return ColorGray + dsl + ColorReset
-}
-
 var quotedValueRegexp = regexp.MustCompile(`['"]([^'"` + "`" + `]+)['"]`)
 
 // HighlightSnippet 根据匹配DSL中的字符串常量，对片段中的关键字进行高亮显示

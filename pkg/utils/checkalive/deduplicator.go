@@ -2,7 +2,6 @@ package checkalive
 
 import (
 	"net/url"
-	"sort"
 	"strings"
 	"veo/pkg/utils/logger"
 )
@@ -98,54 +97,4 @@ type DeduplicationStats struct {
 	UniqueCount    int     // 去重后数量
 	DuplicateCount int     // 重复目标数量
 	DuplicateRate  float64 // 重复率（百分比）
-}
-
-// BatchDeduplicator 批量去重器（支持多个列表合并去重）
-type BatchDeduplicator struct {
-	deduplicator *Deduplicator
-}
-
-// NewBatchDeduplicator 创建批量去重器
-func NewBatchDeduplicator() *BatchDeduplicator {
-	return &BatchDeduplicator{
-		deduplicator: NewDeduplicator(),
-	}
-}
-
-// MergeAndDeduplicate 合并多个目标列表并去重
-func (bd *BatchDeduplicator) MergeAndDeduplicate(targetLists ...[]string) []string {
-	logger.Debugf("开始合并和去重多个目标列表")
-
-	// 合并所有列表
-	var allTargets []string
-	for i, targets := range targetLists {
-		logger.Debugf("列表 %d: %d 个目标", i+1, len(targets))
-		allTargets = append(allTargets, targets...)
-	}
-
-	// 去重
-	result := bd.deduplicator.Deduplicate(allTargets)
-
-	// 排序以确保结果的一致性
-	sort.Strings(result)
-
-	logger.Debugf("合并去重完成: %d -> %d", len(allTargets), len(result))
-	return result
-}
-
-// Reset 重置去重器状态
-func (d *Deduplicator) Reset() {
-	d.seen = make(map[string]bool)
-	logger.Debugf("去重器状态已重置")
-}
-
-// GetSeenCount 获取已见过的目标数量
-func (d *Deduplicator) GetSeenCount() int {
-	return len(d.seen)
-}
-
-// HasSeen 检查是否已经见过某个目标
-func (d *Deduplicator) HasSeen(target string) bool {
-	normalized := d.normalizeForDedup(target)
-	return d.seen[normalized]
 }

@@ -46,8 +46,7 @@ type AddonConfig struct {
 
 // CollectorConfig 收集器配置
 type CollectorConfig struct {
-	GenerationStatusCodes []int        `yaml:"GenerationStatusCodes"`
-	Static                StaticConfig `yaml:"static"`
+	Static StaticConfig `yaml:"static"`
 }
 
 // StaticConfig 静态资源配置
@@ -110,7 +109,6 @@ func LoadConfig(configPath string) (*Config, error) {
 	GlobalConfig = &config
 
 	logger.Debug("配置文件加载成功")
-	logConfigSummary(&config)
 
 	return &config, nil
 }
@@ -132,12 +130,6 @@ func validateConfig(config *Config) error {
 	}
 
 	return nil
-}
-
-// logConfigSummary 打印配置摘要
-func logConfigSummary(config *Config) {
-	logger.Debug("配置摘要:")
-	logger.Debug("  收集器状态码: ", config.Addon.Collector.GenerationStatusCodes)
 }
 
 // InitConfig 初始化配置（自动查找配置文件）
@@ -297,11 +289,6 @@ func matchPattern(text, pattern string) bool {
 	}
 
 	return text == pattern
-}
-
-// GetModuleConfig 获取模块配置
-func GetModuleConfig() ModuleConfig {
-	return GlobalConfig.Module
 }
 
 // HTTP认证头部全局管理

@@ -2,10 +2,7 @@
 
 package dirscan
 
-import (
-	"veo/pkg/utils/logger"
-	"veo/proxy"
-)
+import "veo/pkg/utils/logger"
 
 // ModuleStatus 模块状态
 type ModuleStatus int
@@ -73,23 +70,6 @@ func (dm *DirscanModule) Stop() error {
 	dm.status = ModuleStatusStopped
 	logger.Debug("模块停止成功")
 	return nil
-}
-
-// GetStatus 获取模块状态
-func (dm *DirscanModule) GetStatus() ModuleStatus {
-	return dm.status
-}
-
-// GetAddons 获取模块的proxy addons
-func (dm *DirscanModule) GetAddons() []proxy.Addon {
-	if dm.addon == nil {
-		return []proxy.Addon{}
-	}
-	// 返回collector作为addon
-	if collector := dm.addon.GetCollector(); collector != nil {
-		return []proxy.Addon{collector}
-	}
-	return []proxy.Addon{}
 }
 
 // GetAddon 获取addon实例

@@ -18,7 +18,6 @@ type DirscanAddon struct {
 	engine    *Engine
 	collector *Collector
 	enabled   bool
-	status    ScanStatus
 	depth     int // 递归扫描深度
 }
 
@@ -32,7 +31,6 @@ func NewDirscanAddon(config *EngineConfig) (*DirscanAddon, error) {
 		engine:    engine,
 		collector: collectorInstance,
 		enabled:   true,
-		status:    StatusIdle,
 		depth:     0, // 默认深度为0，可通过SetDepth方法修改
 	}
 
@@ -88,20 +86,6 @@ func (da *DirscanAddon) GetCollectedURLs() []string {
 	return urls
 }
 
-// GetScanResults 获取扫描结果
-func (da *DirscanAddon) GetScanResults() *ScanResult {
-	return da.engine.GetLastScanResult()
-}
-
-// ClearResults 清空结果
-func (da *DirscanAddon) ClearResults() {
-	da.engine.ClearResults()
-	if da.collector != nil {
-		da.collector.ClearURLMap()
-	}
-	logger.Info("扫描结果已清空")
-}
-
 // TriggerScan 触发扫描
 func (da *DirscanAddon) TriggerScan() (*ScanResult, error) {
 	if !da.enabled {
@@ -117,9 +101,6 @@ func (da *DirscanAddon) TriggerScan() (*ScanResult, error) {
 	if len(collectedURLs) == 0 {
 		return nil, fmt.Errorf("没有收集到URL，无法开始扫描")
 	}
-
-	da.status = StatusScanning
-	defer func() { da.status = StatusIdle }()
 
 	// 暂停采集
 	da.collector.DisableCollection()
@@ -149,9 +130,10 @@ func (da *DirscanAddon) TriggerScan() (*ScanResult, error) {
 		}
 
 		// 执行扫描
-		// 注意：recursion.go 中的 LayerScanner 签名接收 depth 参数
-		// 这里我们传递 recursive=true 给 engine，因为我们在递归模式中
-		scanResult, err := da.engine.PerformScanWithFilter(tempCollector, true, filter)
+		// depth==0：首层扫描应使用非递归URL生成（扫描根目录 + 路径层级）
+		// depth>0 ：递归层扫描仅扫描当前目录（不回溯）
+		recursive := currentDepth > 0
+		scanResult, err := da.engine.PerformScanWithFilter(tempCollector, recursive, filter)
 		if err != nil {
 			return nil, err
 		}
@@ -181,32 +163,10 @@ func (da *DirscanAddon) TriggerScan() (*ScanResult, error) {
 		return validPages, nil
 	}
 
-	// 定义数据获取器 (用于目录验证等精确请求)
-	fetcher := func(urls []string) []interfaces.HTTPResponse {
-		// 使用精确扫描方法，不经过字典生成器
-		responses, _ := da.engine.ScanExactURLs(urls)
-		if responses == nil {
-			return nil
-		}
-
-		var res []interfaces.HTTPResponse
-		for _, r := range responses {
-			if r != nil {
-				res = append(res, *r)
-			}
-		}
-		return res
-	}
-
 	// 创建共享过滤器
 	var recursiveFilter *ResponseFilter
 	if depth > 0 {
-		// 优先使用 Engine 配置的 FilterConfig
-		if cfg := da.engine.getFilterConfig(); cfg != nil {
-			recursiveFilter = NewResponseFilter(cfg)
-		} else {
-			recursiveFilter = CreateResponseFilterFromExternal()
-		}
+		recursiveFilter = CreateResponseFilterFromExternal()
 
 		// [取消] 二次指纹识别无需主动探测（icon和404）
 		// 仅保留被动页面识别，避免重复发包
@@ -223,7 +183,6 @@ func (da *DirscanAddon) TriggerScan() (*ScanResult, error) {
 		collectedURLs,
 		depth,
 		layerScanner,
-		fetcher,
 		recursiveFilter,
 	)
 
@@ -240,20 +199,9 @@ func (da *DirscanAddon) TriggerScan() (*ScanResult, error) {
 	return finalResult, nil
 }
 
-// GetStatus 获取扫描状态
-func (da *DirscanAddon) GetStatus() ScanStatus {
-	return da.status
-}
-
 // 配置和依赖注入方法
 
 // 控制台设置接口已移除，保持简洁依赖
-
-// GetCollector 获取collector（用于依赖注入）
-func (da *DirscanAddon) GetCollector() *Collector {
-	return da.collector
-}
-
 // SetCollector 注入外部的URL采集器实例，确保与代理侧使用同一实例
 //
 // 参数:
@@ -281,16 +229,4 @@ func (da *DirscanAddon) SetCollector(c *Collector) {
 // SetDepth 设置递归扫描深度
 func (da *DirscanAddon) SetDepth(depth int) {
 	da.depth = depth
-}
-
-// Proxy.Addon接口实现
-
-// GetName 获取插件名称
-func (da *DirscanAddon) GetName() string {
-	return "DirscanAddon"
-}
-
-// String 字符串表示
-func (da *DirscanAddon) String() string {
-	return "DirscanAddon - 目录扫描插件"
 }

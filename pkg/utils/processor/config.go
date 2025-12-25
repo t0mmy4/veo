@@ -79,13 +79,3 @@ func initializeUserAgentPool(config *RequestConfig) []string {
 
 	return effective
 }
-
-// loadUserAgentsFromConfig 从配置文件加载UserAgent列表 (方法已废弃，直接返回空)
-func loadUserAgentsFromConfig() []string {
-	return nil
-}
-
-// getDefaultUserAgents 获取默认UserAgent列表
-func getDefaultUserAgents() []string {
-	return useragent.DefaultList()
-}

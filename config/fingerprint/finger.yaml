@@ -279,10 +279,6 @@ ebrigade-erp:
     - "icon('/favicon.ico', '41eca7a9245394106a09b2534d8030df')"
     - "icon('/favicon.ico', '281348dd57383c1f214ffb8aed3a1210')"
 
-泛微eoffice:
-  dsl:
-    - "contains(body, 'szfeatures')"
-
 泛微云桥:
   dsl:
     - "contains(body, 'content=\"泛微云桥e-bridge\"')"
@@ -1636,9 +1632,9 @@ empirecms:
   dsl:
     - "icon('/favicon.ico', 'fe059ab89e4bc947d28f8b11fb8fe3b7')"
 
-fanwei-eoffice10:
+fanwei-eoffice:
   dsl:
-    - "contains(body, 'eoffice_init')"
+    - "contains(body, 'eoffice_init','szfeatures','eoffice_loading_tip','cubeGridScaleDelay','eui-theme-1','/mobile/login')"
 
 asp-net-api:
   dsl:
@@ -3154,3 +3150,7 @@ spring-gateway:
 OpenStack:
   dsl:
     - "icon('/favicon.ico', 'd9332f271f2f1c0df5dca81b7a0e3446')"
+
+熊海内容管理系统SeaCMS:
+  dsl:
+    - "contains(body, '欢迎使用 SEACMS','http://www.isea','seacms-style.css')"

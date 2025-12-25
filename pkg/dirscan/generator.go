@@ -43,23 +43,9 @@ type URLComponents struct {
 // NewURLGenerator 创建URL生成器（推荐使用factory.ComponentFactory创建）
 func NewURLGenerator() *URLGenerator {
 	return &URLGenerator{
-		dictManager:   NewDictionaryManager(),
+		dictManager:   &DictionaryManager{},
 		urlValidator:  shared.NewURLValidator(),
 		fileChecker:   shared.NewFileExtensionChecker(),
-		generatedURLs: make([]string, 0),
-	}
-}
-
-// NewURLGeneratorWithDependencies 使用依赖注入创建URL生成器（工厂模式）
-func NewURLGeneratorWithDependencies(
-	dictManager *DictionaryManager,
-	urlValidator *shared.URLValidator,
-	fileChecker *shared.FileExtensionChecker,
-) *URLGenerator {
-	return &URLGenerator{
-		dictManager:   dictManager,
-		urlValidator:  urlValidator,
-		fileChecker:   fileChecker,
 		generatedURLs: make([]string, 0),
 	}
 }
@@ -316,7 +302,7 @@ func processTemplateVariables(dictEntry string, domain string, currentPath strin
 				cleanPath := strings.Trim(currentPath, "/")
 				replacement = cleanPath
 			default:
-				replacement = domain // 默认使用域名（向后兼容）
+				replacement = domain
 			}
 
 			processedEntry = strings.ReplaceAll(processedEntry, template, replacement)
@@ -417,23 +403,4 @@ func (ug *URLGenerator) convertURLMapToList(urlMap map[string]int) []string {
 		urls = append(urls, url)
 	}
 	return urls
-}
-
-// GetGeneratedURLs 获取生成的URL列表
-func (ug *URLGenerator) GetGeneratedURLs() []string {
-	ug.mu.RLock()
-	defer ug.mu.RUnlock()
-
-	result := make([]string, len(ug.generatedURLs))
-	copy(result, ug.generatedURLs)
-	return result
-}
-
-// Reset 重置生成器
-func (ug *URLGenerator) Reset() {
-	ug.mu.Lock()
-	defer ug.mu.Unlock()
-
-	ug.generatedURLs = make([]string, 0)
-	logger.Debug("URL生成器已重置")
 }

@@ -10,7 +10,6 @@ import (
 
 	"veo/internal/scheduler"
 	"veo/pkg/dirscan"
-	"veo/pkg/utils/formatter"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
 )
@@ -60,24 +59,6 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 		}
 	}
 
-	// 定义数据获取器（用于目录验证）
-	fetcher := func(urls []string) []interfaces.HTTPResponse {
-		// 检查Context取消
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-		}
-		responses := sc.requestProcessor.ProcessURLsWithContext(ctx, urls)
-		var result []interfaces.HTTPResponse
-		for _, r := range responses {
-			if r != nil {
-				result = append(result, *r)
-			}
-		}
-		return result
-	}
-
 	// 执行递归扫描
 	var allResults []interfaces.HTTPResponse
 	var recursiveFilter *dirscan.ResponseFilter = nil
@@ -88,7 +69,6 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 		targets,
 		maxDepth,
 		layerScanner,
-		fetcher,
 		recursiveFilter,
 	)
 
@@ -118,7 +98,7 @@ func (sc *ScanController) runConcurrentDirscan(ctx context.Context, targets []st
 	printChan := make(chan *interfaces.HTTPResponse, 100)
 	printWg := sync.WaitGroup{}
 	printWg.Add(1)
-	go sc.startResultPrinter(printChan, &printWg, filter)
+	go sc.startResultPrinter(printChan, &printWg)
 
 	scheduler.SetResultCallback(func(target string, resp *interfaces.HTTPResponse) {
 		sc.handleRealTimeResult(ctx, target, resp, filter, &allResults, &resultsMu, printChan)
@@ -146,7 +126,7 @@ func (sc *ScanController) runSequentialDirscan(ctx context.Context, targets []st
 	printChan := make(chan *interfaces.HTTPResponse, 100)
 	printWg := sync.WaitGroup{}
 	printWg.Add(1)
-	go sc.startResultPrinter(printChan, &printWg, filter)
+	go sc.startResultPrinter(printChan, &printWg)
 
 	defer func() {
 		close(printChan)
@@ -165,18 +145,6 @@ func (sc *ScanController) runSequentialDirscan(ctx context.Context, targets []st
 		// 生成扫描URL
 		scanURLs := sc.generateDirscanURLs(target, recursive)
 		logger.Debugf("为 %s 生成了 %d 个扫描URL", target, len(scanURLs))
-
-		// [调试] 打印生成的URL示例（前5个）
-		if len(scanURLs) > 0 {
-			count := 5
-			if len(scanURLs) < count {
-				count = len(scanURLs)
-			}
-			logger.Debugf("生成的URL示例 (Top %d):", count)
-			for i := 0; i < count; i++ {
-				logger.Debugf("  - %s", scanURLs[i])
-			}
-		}
 
 		// 发起HTTP请求（实时处理）
 		// 使用支持 ctx 的版本，确保 Ctrl+C 能尽快停止当前目标的剩余URL派发
@@ -224,14 +192,8 @@ func (sc *ScanController) generateDirscanURLs(target string, recursive bool) []s
 	}
 
 	if recursive {
-		// 递归模式：只扫描最终的目标路径，不生成中间路径的扫描任务
-		// 但这里的 scanTargets 生成逻辑其实是把每一层都加进去了
-		// 如果是递归模式，我们其实只关心最后一个 scanTarget
-		if len(scanTargets) > 0 {
-			lastTarget := scanTargets[len(scanTargets)-1]
-			return sc.urlGenerator.GenerateRecursiveURLs([]string{lastTarget})
-		}
-		return sc.urlGenerator.GenerateRecursiveURLs(scanTargets)
+		lastTarget := scanTargets[len(scanTargets)-1]
+		return sc.urlGenerator.GenerateRecursiveURLs([]string{lastTarget})
 	}
 	return sc.urlGenerator.GenerateURLs(scanTargets)
 }
@@ -255,8 +217,6 @@ func (sc *ScanController) handleRealTimeResult(ctx context.Context, target strin
 			if page == nil {
 				continue
 			}
-			// 添加到结果集（由于 validPages 是指针切片，我们需要解引用来存储值，或者修改 results 类型）
-			// 这里 results 是 []interfaces.HTTPResponse (值切片)，为了兼容现有代码结构
 			*results = append(*results, *page)
 
 			// 发送到打印通道
@@ -272,113 +232,13 @@ func (sc *ScanController) handleRealTimeResult(ctx context.Context, target strin
 }
 
 // startResultPrinter 启动结果打印协程
-func (sc *ScanController) startResultPrinter(printChan <-chan *interfaces.HTTPResponse, wg *sync.WaitGroup, filter *dirscan.ResponseFilter) {
+func (sc *ScanController) startResultPrinter(printChan <-chan *interfaces.HTTPResponse, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for page := range printChan {
 		if page == nil {
 			continue
 		}
-		// 使用提取出来的打印逻辑
-		sc.printSingleValidPage(page, filter)
+		printHTTPResponseResult(page, sc.showFingerprintSnippet, sc.showFingerprintRule)
 	}
-}
-
-// printSingleValidPage 打印单个有效页面（从ResponseFilter提取出的逻辑）
-func (sc *ScanController) printSingleValidPage(page *interfaces.HTTPResponse, filter *dirscan.ResponseFilter) {
-	// 使用已经识别好的指纹信息
-	matches := page.Fingerprints
-	var fingerprintUnion string
-
-	// 格式化指纹显示
-	if len(matches) > 0 {
-		// 转换为指针列表以便使用 formatFingerprintMatches (这是一个 hack，因为 formatter 需要 []*Match)
-		matchPtrs := make([]*interfaces.FingerprintMatch, len(matches))
-		for i := range matches {
-			matchPtrs[i] = &matches[i]
-		}
-
-		// 暂时还需要访问 filter 获取显示配置，理想情况这应该在 Printer 配置中
-		// 但为了最小化改动，我们这里还是复用 filter 的方法，只是逻辑在外部控制
-		// 注意：formatFingerprintMatches 是私有方法，我们需要在 filter.go 中公开它或者复制逻辑
-		// 这里我们暂时假设 ResponseFilter 还有这个能力，或者我们需要把它移出来
-		// 由于 formatFingerprintMatches 是私有的，我们暂时无法直接调用。
-		// 我们需要修改 filter.go 将其公开，或者在 cli 包中实现格式化逻辑。
-		// 鉴于 KISS 原则，我们在 cli 包中实现一个简单的 wrapper
-		fingerprintUnion = sc.formatFingerprintMatches(matchPtrs, sc.showFingerprintRule)
-	}
-
-	fingerprintParts := []string{}
-	if strings.TrimSpace(fingerprintUnion) != "" {
-		fingerprintParts = append(fingerprintParts, fingerprintUnion)
-	}
-
-	line := formatter.FormatLogLine(
-		page.URL,
-		page.StatusCode,
-		page.Title,
-		page.ContentLength,
-		page.ContentType,
-		fingerprintParts,
-		len(matches) > 0,
-	)
-
-	var messageBuilder strings.Builder
-	messageBuilder.WriteString(line)
-
-	// 如果 URL 过长（超过 60 字符），在下一行输出完整 URL 方便复制
-	if len(page.URL) > 60 {
-		messageBuilder.WriteString("\n")
-		messageBuilder.WriteString("  └─ ")
-		messageBuilder.WriteString(formatter.FormatFullURL(page.URL))
-	}
-
-	if sc.showFingerprintSnippet && len(matches) > 0 {
-		var snippetLines []string
-		for _, m := range matches {
-			snippet := strings.TrimSpace(m.Snippet)
-			if snippet == "" {
-				continue
-			}
-			highlighted := formatter.HighlightSnippet(snippet, m.Matcher)
-			if highlighted == "" {
-				continue
-			}
-			snippetLines = append(snippetLines, highlighted)
-		}
-		if len(snippetLines) > 0 {
-			messageBuilder.WriteString("\n")
-			for idx, snippetLine := range snippetLines {
-				if idx > 0 {
-					messageBuilder.WriteString("\n")
-				}
-				messageBuilder.WriteString("  ")
-				messageBuilder.WriteString(formatter.FormatSnippetArrow())
-				messageBuilder.WriteString(snippetLine)
-			}
-		}
-	}
-
-	logger.Info(messageBuilder.String())
-}
-
-// formatFingerprintMatches 格式化指纹匹配结果 (Cli版本)
-func (sc *ScanController) formatFingerprintMatches(matches []*interfaces.FingerprintMatch, showRule bool) string {
-	if len(matches) == 0 {
-		return ""
-	}
-
-	var parts []string
-	for _, match := range matches {
-		if match == nil {
-			continue
-		}
-
-		display := formatter.FormatFingerprintDisplay(match.RuleName, match.Matcher, showRule)
-		if display != "" {
-			parts = append(parts, display)
-		}
-	}
-
-	return strings.Join(parts, " ")
 }

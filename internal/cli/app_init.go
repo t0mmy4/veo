@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"veo/internal/core/config"
-	"veo/pkg/core/console"
 	modulepkg "veo/pkg/core/module"
 	"veo/pkg/dirscan"
 	"veo/pkg/fingerprint"
@@ -28,14 +27,12 @@ func initializeApp(args *CLIArgs) (*CLIApp, error) {
 
 	// 只在启用dirscan模块时创建collector和相关组件
 	var collectorInstance *dirscan.Collector
-	var consoleManager *console.ConsoleManager
 	var dirscanModule *dirscan.DirscanModule
 
 	if args.HasModule(string(modulepkg.ModuleDirscan)) {
 		logger.Debug("启用目录扫描模块，创建相关组件...")
 
 		collectorInstance = dirscan.NewCollector()
-		consoleManager = console.NewConsoleManager(collectorInstance)
 
 		dirscanModule, err = dirscan.NewDirscanModule(collectorInstance)
 		if err != nil {
@@ -67,19 +64,11 @@ func initializeApp(args *CLIArgs) (*CLIApp, error) {
 	app := &CLIApp{
 		proxy:             proxyServer,
 		collector:         collectorInstance,
-		consoleManager:    consoleManager,
 		dirscanModule:     dirscanModule,
 		fingerprintAddon:  fingerprintAddon,
 		authLearningAddon: authLearningAddon,
 		proxyStarted:      false,
 		args:              args,
-	}
-
-	if consoleManager != nil {
-		consoleManager.SetProxyController(app)
-		if fingerprintAddon != nil {
-			consoleManager.SetFingerprintAddon(fingerprintAddon)
-		}
 	}
 
 	logger.Debug("应用程序初始化完成")

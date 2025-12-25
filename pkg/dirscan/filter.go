@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"veo/pkg/utils/formatter"
 	"veo/pkg/utils/httpclient"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
@@ -340,50 +339,11 @@ func (rf *ResponseFilter) deduplicateValidPages(pages []*interfaces.HTTPResponse
 	return uniquePages
 }
 
-// UpdateConfig 更新过滤器配置
-func (rf *ResponseFilter) UpdateConfig(config *FilterConfig) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	rf.config = config
-}
-
-// GetConfig 获取当前配置
-func (rf *ResponseFilter) GetConfig() *FilterConfig {
-	rf.mu.RLock()
-	defer rf.mu.RUnlock()
-
-	// 返回配置副本
-	return &FilterConfig{
-		ValidStatusCodes:     rf.config.ValidStatusCodes,
-		InvalidPageThreshold: rf.config.InvalidPageThreshold,
-		SecondaryThreshold:   rf.config.SecondaryThreshold,
-		EnableStatusFilter:   rf.config.EnableStatusFilter,
-	}
-}
-
-// Reset 重置过滤器状态
-func (rf *ResponseFilter) Reset() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	rf.primaryHashMap = make(map[string]*interfaces.PageHash)
-	rf.secondaryHashMap = make(map[string]*interfaces.PageHash)
-
-	logger.Debug("过滤器状态已重置")
-}
-
 // GetInvalidPageHashes 获取无效页面哈希统计
 func (rf *ResponseFilter) GetInvalidPageHashes() []interfaces.PageHash {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	return rf.collectHashes(rf.primaryHashMap, rf.config.InvalidPageThreshold)
-}
-
-// GetPageHashCount 获取页面哈希统计数量（兼容旧接口）
-func (rf *ResponseFilter) GetPageHashCount() int {
-	rf.mu.RLock()
-	defer rf.mu.RUnlock()
-	return len(rf.primaryHashMap)
 }
 
 // ============================================================================
@@ -410,19 +370,6 @@ func IsContentTypeFiltered(contentType string) bool {
 
 	// 执行Content-Type检查逻辑
 	return checkContentTypeAgainstRules(contentType, config.FilteredContentTypes)
-}
-
-// IsContentTypeFilteredWithConfig 使用指定配置检测Content-Type是否应该过滤
-func IsContentTypeFilteredWithConfig(contentType string, cfg *FilterConfig) bool {
-	if cfg == nil {
-		return IsContentTypeFiltered(contentType)
-	}
-
-	if !cfg.EnableContentTypeFilter {
-		return false
-	}
-
-	return checkContentTypeAgainstRules(contentType, cfg.FilteredContentTypes)
 }
 
 // checkContentTypeAgainstRules 检查Content-Type是否匹配过滤规则
@@ -458,32 +405,7 @@ func CreateResponseFilterFromExternal() *ResponseFilter {
 	return responseFilter
 }
 
-// ============================================================================
-// 打印相关方法 (原printer.go内容)
-// ============================================================================
-
-// 使用formatter包中的格式化函数
-var (
-	formatURL        = formatter.FormatURL
-	formatFullURL    = formatter.FormatFullURL
-	formatStatusCode = formatter.FormatStatusCode
-	formatTitle      = formatter.FormatTitle
-	// formatResultNumber 已废弃，不再使用序号显示
-	formatContentLength = formatter.FormatContentLength
-	formatContentType   = formatter.FormatContentType
-)
-
 var globalFilterConfig atomic.Value
-
-// formatNumber 格式化数字显示（加粗）
-func formatNumber(num int) string {
-	return formatter.FormatNumber(num)
-}
-
-// formatPercentage 格式化百分比显示
-func formatPercentage(percentage float64) string {
-	return formatter.FormatPercentage(percentage)
-}
 
 // performFingerprintRecognition 对单个响应执行指纹识别
 func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPResponse, engine interfaces.FingerprintAnalyzer, client httpclient.HTTPClientInterface) []interfaces.FingerprintMatch {

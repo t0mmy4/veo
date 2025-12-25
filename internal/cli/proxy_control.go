@@ -4,7 +4,6 @@ package cli
 
 import (
 	modulepkg "veo/pkg/core/module"
-	"veo/pkg/fingerprint"
 	"veo/pkg/utils/logger"
 )
 
@@ -52,14 +51,4 @@ func (app *CLIApp) StopProxy() error {
 
 	app.proxyStarted = false
 	return nil
-}
-
-// IsProxyStarted 检查代理是否已启动
-func (app *CLIApp) IsProxyStarted() bool {
-	return app.proxyStarted
-}
-
-// GetFingerprintAddon 获取指纹识别插件
-func (app *CLIApp) GetFingerprintAddon() *fingerprint.FingerprintAddon {
-	return app.fingerprintAddon
 }

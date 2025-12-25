@@ -37,51 +37,6 @@ func (e *Engine) SetProxy(proxyURL string) {
 	e.config.ProxyURL = proxyURL
 }
 
-// SetFilterConfig 设置自定义过滤器配置（SDK可用）
-func (e *Engine) SetFilterConfig(cfg *FilterConfig) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.filterConfig = CloneFilterConfig(cfg)
-}
-
-func (e *Engine) getFilterConfig() *FilterConfig {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if e.filterConfig == nil {
-		return nil
-	}
-	return CloneFilterConfig(e.filterConfig)
-}
-
-// GetLastScanResult 获取最后一次扫描结果
-func (e *Engine) GetLastScanResult() *ScanResult {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	if e.lastScanResult == nil {
-		return nil
-	}
-
-	// 返回副本
-	result := *e.lastScanResult
-	return &result
-}
-
-// ClearResults 清空结果
-func (e *Engine) ClearResults() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	e.lastScanResult = nil
-
-	logger.Debug("扫描结果已清空")
-}
-
-// PerformScan 执行扫描
-func (e *Engine) PerformScan(collectorInstance interfaces.URLCollectorInterface) (*ScanResult, error) {
-	return e.PerformScanWithOptions(collectorInstance, false)
-}
-
 // PerformScanWithFilter 执行扫描（支持自定义过滤器）
 func (e *Engine) PerformScanWithFilter(collectorInstance interfaces.URLCollectorInterface, recursive bool, filter *ResponseFilter) (*ScanResult, error) {
 	e.mu.Lock()
@@ -109,8 +64,6 @@ func (e *Engine) PerformScanWithFilter(collectorInstance interfaces.URLCollector
 	var responseFilter *ResponseFilter
 	if filter != nil {
 		responseFilter = filter
-	} else if cfg := e.getFilterConfig(); cfg != nil {
-		responseFilter = NewResponseFilter(cfg)
 	} else {
 		responseFilter = CreateResponseFilterFromExternal()
 	}
@@ -199,7 +152,6 @@ func (e *Engine) PerformScanWithFilter(collectorInstance interfaces.URLCollector
 
 	// 5. 更新统计信息
 	e.mu.Lock()
-	e.lastScanResult = result
 	e.stats.LastScanTime = endTime
 	atomic.AddInt64(&e.stats.TotalScans, 1)
 	atomic.StoreInt64(&e.stats.ValidResults, int64(len(finalFilterResult.ValidPages)))
@@ -212,24 +164,6 @@ func (e *Engine) PerformScanWithFilter(collectorInstance interfaces.URLCollector
 // PerformScanWithOptions 执行扫描（支持选项）
 func (e *Engine) PerformScanWithOptions(collectorInstance interfaces.URLCollectorInterface, recursive bool) (*ScanResult, error) {
 	return e.PerformScanWithFilter(collectorInstance, recursive, nil)
-}
-
-// ScanExactURLs 对指定的URL列表执行扫描（不进行字典生成）
-// 专门用于递归验证或精确目标扫描
-func (e *Engine) ScanExactURLs(urls []string) ([]*interfaces.HTTPResponse, error) {
-	if len(urls) == 0 {
-		return nil, nil
-	}
-
-	logger.Debugf("执行精确URL扫描: %d 个", len(urls))
-
-	// 直接调用 HTTP 请求执行逻辑
-	responses, err := e.performHTTPRequests(urls)
-	if err != nil {
-		return nil, err
-	}
-
-	return responses, nil
 }
 
 // generateScanURLs 生成扫描URL
@@ -260,11 +194,6 @@ func (e *Engine) performHTTPRequestsWithCallback(scanURLs []string, callback fun
 	atomic.StoreInt64(&e.stats.SuccessRequests, int64(len(responses)))
 
 	return responses, nil
-}
-
-// performHTTPRequests 执行HTTP请求
-func (e *Engine) performHTTPRequests(scanURLs []string) ([]*interfaces.HTTPResponse, error) {
-	return e.performHTTPRequestsWithCallback(scanURLs, nil)
 }
 
 // getOrCreateRequestProcessor 获取或创建请求处理器
@@ -317,67 +246,6 @@ func (e *Engine) getActualConcurrency() int {
 
 	// 最后的备用值
 	return 50
-}
-
-// applyFilter 应用过滤器
-func (e *Engine) applyFilter(responses []*interfaces.HTTPResponse, externalFilter *ResponseFilter) (*interfaces.FilterResult, error) {
-	logger.Debug("开始应用响应过滤器")
-
-	var responseFilter *ResponseFilter
-	if externalFilter != nil {
-		responseFilter = externalFilter
-	} else if cfg := e.getFilterConfig(); cfg != nil {
-		responseFilter = NewResponseFilter(cfg)
-	} else {
-		responseFilter = CreateResponseFilterFromExternal()
-	}
-
-	// [修复] 注入 HTTP 客户端以支持 icon() 等主动探测指纹
-	if responseFilter != nil {
-		processor := e.getOrCreateRequestProcessor()
-		responseFilter.SetHTTPClient(processor)
-	}
-
-	// 转换为过滤器可处理的格式
-	// [优化] 直接传递指针切片，convertToFilterResponses 已废弃或修改
-	// filterResponses := e.convertToFilterResponses(responses)
-
-	// 应用过滤器
-	filterResult := responseFilter.FilterResponses(responses)
-
-	return filterResult, nil
-}
-
-// convertToFilterResponses 转换响应格式（内存优化版本）
-// [已废弃] FilterResponses 现在直接接收 []*HTTPResponse，无需转换
-func (e *Engine) convertToFilterResponses(httpResponses []*interfaces.HTTPResponse) []interfaces.HTTPResponse {
-	filterResponses := make([]interfaces.HTTPResponse, len(httpResponses))
-	for i, resp := range httpResponses {
-		// 内存优化：只复制过滤器真正需要的核心字段
-		// [修复] 必须包含 ResponseHeaders，否则 header() 指纹规则和解压缩逻辑会失效
-		filterResponses[i] = interfaces.HTTPResponse{
-			URL:             resp.URL,                   // 结果展示需要
-			StatusCode:      resp.StatusCode,            // 状态码过滤器使用
-			ContentLength:   resp.ContentLength,         // 哈希过滤器容错计算使用
-			ContentType:     resp.ContentType,           // Content-Type过滤器使用
-			Title:           resp.Title,                 // 哈希过滤器生成页面哈希使用
-			Body:            e.getFilterBody(resp.Body), // 哈希计算使用（已截断）
-			ResponseHeaders: resp.ResponseHeaders,       // 指纹识别 header() 规则需要
-			// 内存优化：其他字段使用零值，大幅减少内存占用
-			// Method、Server、IsDirectory、Length、Duration、Depth等字段在过滤器中未使用
-		}
-	}
-	return filterResponses
-}
-
-// getFilterBody 获取用于过滤的响应体（内存优化）
-func (e *Engine) getFilterBody(body string) string {
-	// 过滤器只需要响应体的前部分用于哈希计算
-	const maxFilterBodySize = 4096 // 4KB足够用于过滤判断
-	if len(body) > maxFilterBodySize {
-		return body[:maxFilterBodySize]
-	}
-	return body
 }
 
 // extractTarget 提取目标信息

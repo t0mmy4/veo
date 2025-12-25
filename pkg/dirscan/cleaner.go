@@ -10,8 +10,6 @@ import (
 
 // URLCleaner 负责URL的清理、规范化和参数过滤
 type URLCleaner struct {
-	staticExtensions  []string
-	staticPaths       []string
 	invalidParams     map[string]bool
 	authParams        map[string]bool
 	timestampPatterns []string
@@ -44,52 +42,20 @@ func NewURLCleaner() *URLCleaner {
 	return c
 }
 
-// SetStaticExtensions 设置静态文件扩展名
-func (c *URLCleaner) SetStaticExtensions(exts []string) {
-	c.staticExtensions = exts
-}
-
-// SetStaticPaths 设置静态路径
-func (c *URLCleaner) SetStaticPaths(paths []string) {
-	c.staticPaths = paths
-}
-
 // IsStaticResource 检查URL是否为静态资源
 func (c *URLCleaner) IsStaticResource(rawURL string) bool {
 	lowerURL := strings.ToLower(rawURL)
 
-	// 检查是否包含静态目录
-	for _, dir := range c.staticPaths {
-		if strings.Contains(lowerURL, strings.ToLower(dir)) {
-			logger.Debugf("匹配静态目录，过滤: %s", rawURL)
-			return true
-		}
-	}
-
-	// 检查是否以静态文件扩展名结尾
-	checker := shared.NewFileExtensionChecker()
-	// 如果设置了自定义扩展名，可能需要合并逻辑，但目前shared.Checker涵盖了通用的
-	// 这里假设 shared.Checker 是基础，c.staticExtensions 是额外的？
-	// 原代码逻辑：isStatic := c.hasStaticExtension(...)
-	// 原代码直接调用 shared.NewFileExtensionChecker().IsStaticFile(lowerURL)
-	// 并没有使用 c.staticExtensions ！！！ 这是一个BUG或者原代码的无用字段。
-	// 原代码：
-	// func (c *Collector) hasStaticExtension(lowerURL string, extensions []string) bool {
-	//    checker := shared.NewFileExtensionChecker()
-	//    return checker.IsStaticFile(lowerURL)
-	// }
-	// extensions 参数被忽略了。
-
-	if checker.IsStaticFile(lowerURL) {
-		logger.Debugf("匹配静态扩展名，过滤: %s", rawURL)
+	pathChecker := shared.NewPathChecker()
+	if pathChecker.IsStaticPath(rawURL) {
+		logger.Debugf("匹配静态目录，过滤: %s", rawURL)
 		return true
 	}
 
-	// 如果我们要支持自定义扩展名：
-	for _, ext := range c.staticExtensions {
-		if strings.HasSuffix(lowerURL, strings.ToLower(ext)) {
-			return true
-		}
+	checker := shared.NewFileExtensionChecker()
+	if checker.IsStaticFile(lowerURL) {
+		logger.Debugf("匹配静态扩展名，过滤: %s", rawURL)
+		return true
 	}
 
 	return false

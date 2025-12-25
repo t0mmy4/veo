@@ -26,10 +26,7 @@ type DictionaryCache struct {
 	mu      sync.RWMutex
 }
 
-type DictionaryManager struct {
-	loaded bool
-	mu     sync.RWMutex
-}
+type DictionaryManager struct{}
 
 func getCache() *DictionaryCache {
 	cacheOnce.Do(func() {
@@ -86,21 +83,6 @@ func SetWordlistPaths(paths []string) {
 	cache.mu.Unlock()
 }
 
-func GetWordlistPaths() []string {
-	wordlistMu.RLock()
-	defer wordlistMu.RUnlock()
-	if customWordlists == nil {
-		return nil
-	}
-	result := make([]string, len(customWordlists))
-	copy(result, customWordlists)
-	return result
-}
-
-func NewDictionaryManager() *DictionaryManager {
-	return &DictionaryManager{}
-}
-
 func (dm *DictionaryManager) LoadDictionaries() error {
 	cache := getCache()
 	if !cache.isLoaded() {
@@ -111,9 +93,6 @@ func (dm *DictionaryManager) LoadDictionaries() error {
 		cacheMutex.Unlock()
 	}
 
-	dm.mu.Lock()
-	dm.loaded = true
-	dm.mu.Unlock()
 	return nil
 }
 
@@ -202,48 +181,19 @@ func (cache *DictionaryCache) isLoaded() bool {
 	return cache.loaded
 }
 
-func (dm *DictionaryManager) ensureLoaded() {
-	dm.mu.RLock()
-	loaded := dm.loaded
-	dm.mu.RUnlock()
-
-	if !loaded {
-		_ = dm.LoadDictionaries()
-	}
-}
-
 func (dm *DictionaryManager) GetCommonDictionary() []string {
-	dm.ensureLoaded()
+	_ = dm.LoadDictionaries()
 	cache := getCache()
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
 	return append([]string(nil), cache.entries...)
 }
-
-func (dm *DictionaryManager) GetFilesDictionary() []string {
-	return []string{}
-}
-
-func (dm *DictionaryManager) GetCombinedDictionary() []string {
-	return dm.GetCommonDictionary()
-}
-
-func (dm *DictionaryManager) IsLoaded() bool {
-	dm.mu.RLock()
-	defer dm.mu.RUnlock()
-	return dm.loaded
-}
-
 func (dm *DictionaryManager) Reset() {
 	cache := getCache()
 	cache.mu.Lock()
 	cache.entries = nil
 	cache.loaded = false
 	cache.mu.Unlock()
-
-	dm.mu.Lock()
-	dm.loaded = false
-	dm.mu.Unlock()
 
 	logger.Debug("字典管理器已重置")
 }

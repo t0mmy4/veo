@@ -27,31 +27,6 @@ func extractHost(hostWithPort string) string {
 	return host
 }
 
-// ResponseCheck 本地响应检查器（从helper包迁移）
-type ResponseCheck struct {
-	http.ResponseWriter
-	Wrote bool
-}
-
-// NewResponseCheck 创建响应检查器
-func NewResponseCheck(r http.ResponseWriter) http.ResponseWriter {
-	return &ResponseCheck{
-		ResponseWriter: r,
-	}
-}
-
-// WriteHeader 写入响应头
-func (r *ResponseCheck) WriteHeader(statusCode int) {
-	r.Wrote = true
-	r.ResponseWriter.WriteHeader(statusCode)
-}
-
-// Write 写入响应体
-func (r *ResponseCheck) Write(bytes []byte) (int, error) {
-	r.Wrote = true
-	return r.ResponseWriter.Write(bytes)
-}
-
 // IsTls 检查是否为TLS连接（从helper包迁移）
 func IsTls(buf []byte) bool {
 	if len(buf) < 3 {
@@ -235,15 +210,6 @@ func (e *entry) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// Add entry proxy authentication
-	if e.proxy.authProxy != nil {
-		b, err := e.proxy.authProxy(res, req)
-		if !b {
-			logger.Errorf("%s 代理认证失败: %s", prefix, err.Error())
-			httpError(res, "", http.StatusProxyAuthRequired)
-			return
-		}
-	}
 	// proxy via connect tunnel
 	if req.Method == "CONNECT" {
 		e.handleConnect(res, req)
@@ -267,22 +233,15 @@ func (e *entry) handleConnect(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	shouldIntercept := proxy.shouldIntercept == nil || proxy.shouldIntercept(req)
 	f := newFlow()
 	f.Request = newRequest(req)
 	f.ConnContext = req.Context().Value(connContextKey).(*ConnContext)
-	f.ConnContext.Intercept = shouldIntercept
+	f.ConnContext.Intercept = true
 	defer f.finish()
 
 	// trigger addon event Requestheaders
 	for _, addon := range proxy.Addons {
 		addon.Requestheaders(f)
-	}
-
-	if !shouldIntercept {
-		// log.Debugf("begin transpond %v", req.Host)
-		e.directTransfer(res, req, f)
-		return
 	}
 
 	if f.ConnContext.ClientConn.UpstreamCert {
@@ -317,28 +276,6 @@ func (e *entry) establishConnection(res http.ResponseWriter, f *Flow) (net.Conn,
 	}
 
 	return cconn, nil
-}
-
-func (e *entry) directTransfer(res http.ResponseWriter, req *http.Request, f *Flow) {
-	proxy := e.proxy
-	prefix := fmt.Sprintf("[Proxy.entry.directTransfer host=%s]", req.Host)
-
-	conn, err := proxy.getUpstreamConn(req.Context(), req)
-	if err != nil {
-		// log.Error(err)
-		res.WriteHeader(502)
-		return
-	}
-	defer conn.Close()
-
-	cconn, err := e.establishConnection(res, f)
-	if err != nil {
-		// log.Error(err)
-		return
-	}
-	defer cconn.Close()
-
-	transfer(prefix, conn, cconn)
 }
 
 func (e *entry) httpsDialFirstAttack(res http.ResponseWriter, req *http.Request, f *Flow) {

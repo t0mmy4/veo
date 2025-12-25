@@ -63,15 +63,6 @@ func DefaultConfig() *Config {
 	}
 }
 
-// DefaultConfigWithUserAgent 获取带自定义UserAgent的默认HTTP客户端配置
-func DefaultConfigWithUserAgent(userAgent string) *Config {
-	config := DefaultConfig()
-	if userAgent != "" {
-		config.UserAgent = userAgent
-	}
-	return config
-}
-
 // 通用HTTP客户端实现（基于 fasthttp）
 
 // Client 通用HTTP客户端实现

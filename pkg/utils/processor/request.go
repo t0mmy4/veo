@@ -12,7 +12,6 @@ import (
 	"veo/pkg/utils/httpclient"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
-	"veo/pkg/utils/processor/auth"
 	"veo/pkg/utils/shared"
 	"veo/pkg/utils/useragent"
 )
@@ -29,9 +28,8 @@ type RequestProcessor struct {
 	batchMode      bool                   // 批量扫描模式标志
 
 	// HTTP认证头部管理
-	customHeaders        map[string]string  // CLI指定的自定义头部
-	authDetector         *auth.AuthDetector // 认证检测器
-	redirectSameHostOnly bool               // 是否限制重定向在同主机
+	customHeaders        map[string]string // CLI指定的自定义头部
+	redirectSameHostOnly bool              // 是否限制重定向在同主机
 }
 
 // 构造函数
@@ -59,9 +57,7 @@ func NewRequestProcessor(config *RequestConfig) *RequestProcessor {
 		userAgentPool:  initializeUserAgentPool(config),
 		titleExtractor: shared.NewTitleExtractor(),
 
-		// 新增：初始化认证头部管理
 		customHeaders:        make(map[string]string),
-		authDetector:         auth.NewAuthDetector(),
 		redirectSameHostOnly: true,
 	}
 
@@ -88,7 +84,6 @@ func (rp *RequestProcessor) CloneWithContext(moduleContext string, timeout time.
 		statsUpdater:         rp.statsUpdater,
 		batchMode:            true,
 		customHeaders:        make(map[string]string),
-		authDetector:         auth.NewAuthDetector(),
 		redirectSameHostOnly: rp.redirectSameHostOnly,
 	}
 
@@ -127,15 +122,6 @@ func (rp *RequestProcessor) SetCustomHeaders(headers map[string]string) {
 	for key, value := range headers {
 		rp.customHeaders[key] = value
 	}
-
-	// 如果设置了自定义头部，禁用自动检测
-	if len(headers) > 0 {
-		rp.authDetector.SetEnabled(false)
-		logger.Debugf("设置了 %d 个自定义头部，禁用自动认证检测", len(headers))
-	} else {
-		rp.authDetector.SetEnabled(true)
-		logger.Debug("未设置自定义头部，启用自动认证检测")
-	}
 }
 
 // HasCustomHeaders 检查是否设置了自定义头部
@@ -146,12 +132,6 @@ func (rp *RequestProcessor) HasCustomHeaders() bool {
 }
 
 // 请求处理器核心方法
-
-// ProcessURLs 处理URL列表，发起HTTP请求并返回响应结构体列表
-func (rp *RequestProcessor) ProcessURLs(urls []string) []*interfaces.HTTPResponse {
-	return rp.ProcessURLsWithContext(context.Background(), urls)
-}
-
 // ProcessURLsWithContext 处理URL列表（可取消）
 func (rp *RequestProcessor) ProcessURLsWithContext(ctx context.Context, urls []string) []*interfaces.HTTPResponse {
 	if len(urls) == 0 {
@@ -356,11 +336,6 @@ func (rp *RequestProcessor) processURLWithContext(ctx context.Context, url strin
 
 // HTTP请求相关方法
 
-// DoRequest 对外暴露的单次HTTP请求能力（可选自定义头部）
-func (rp *RequestProcessor) DoRequest(rawURL string, headers map[string]string) (*interfaces.HTTPResponse, error) {
-	return rp.makeRequestWithHeaders(rawURL, headers)
-}
-
 // makeRequest 使用httpclient发起请求
 func (rp *RequestProcessor) makeRequest(rawURL string) (*interfaces.HTTPResponse, error) {
 	return rp.makeRequestWithHeaders(rawURL, nil)
@@ -433,11 +408,6 @@ func (rp *RequestProcessor) UpdateConfig(config *RequestConfig) {
 	rp.userAgentPool = initializeUserAgentPool(config)
 }
 
-// UpdateUserAgents 更新UserAgent列表
-func (rp *RequestProcessor) UpdateUserAgents(userAgents []string) {
-	rp.updateUserAgentPool(userAgents)
-}
-
 // SetModuleContext 设置模块上下文标识
 func (rp *RequestProcessor) SetModuleContext(context string) {
 	rp.mu.Lock()
@@ -478,12 +448,6 @@ func (rp *RequestProcessor) IsBatchMode() bool {
 	rp.mu.RLock()
 	defer rp.mu.RUnlock()
 	return rp.batchMode
-}
-
-// Close 关闭请求处理器，清理资源
-func (rp *RequestProcessor) Close() {
-	// httpclient 通常不需要显式关闭，但在需要时可以扩展
-	logger.Info("请求处理器已关闭")
 }
 
 // 性能优化：预编译的超时错误正则表达式
@@ -563,21 +527,7 @@ func (rp *RequestProcessor) isRedirectError(err error) bool {
 	return false
 }
 
-// UserAgent相关方法 (原useragent.go内容)
-
-// updateUserAgentPool 更新UserAgent池
-func (rp *RequestProcessor) updateUserAgentPool(userAgents []string) {
-	rp.mu.Lock()
-	defer rp.mu.Unlock()
-
-	if len(userAgents) > 0 {
-		rp.userAgentPool = userAgents
-		logger.Debug(fmt.Sprintf("UserAgent池已更新，共 %d 个", len(userAgents)))
-	} else {
-		rp.userAgentPool = getDefaultUserAgents()
-		logger.Debug("使用默认UserAgent池")
-	}
-}
+// UserAgent相关方法
 
 // getRandomUserAgent 获取随机UserAgent
 func (rp *RequestProcessor) getRandomUserAgent() string {
@@ -596,14 +546,9 @@ func (rp *RequestProcessor) getRandomUserAgent() string {
 	return rp.userAgentPool[index]
 }
 
-// GetUserAgent 返回当前配置下的User-Agent（供外部HTTP客户端复用）
-func (rp *RequestProcessor) GetUserAgent() string {
-	return rp.getRandomUserAgent()
-}
-
 // MakeRequest 实现 httpclient.HTTPClientInterface 接口
 func (rp *RequestProcessor) MakeRequest(rawURL string) (string, int, error) {
-	resp, err := rp.DoRequest(rawURL, nil)
+	resp, err := rp.makeRequestWithHeaders(rawURL, nil)
 	if err != nil {
 		return "", 0, err
 	}
@@ -615,7 +560,7 @@ func (rp *RequestProcessor) MakeRequest(rawURL string) (string, int, error) {
 
 // MakeRequestWithHeaders 实现 httpclient.HeaderAwareClient 接口
 func (rp *RequestProcessor) MakeRequestWithHeaders(rawURL string, headers map[string]string) (string, int, error) {
-	resp, err := rp.DoRequest(rawURL, headers)
+	resp, err := rp.makeRequestWithHeaders(rawURL, headers)
 	if err != nil {
 		return "", 0, err
 	}

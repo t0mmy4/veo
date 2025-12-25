@@ -3,7 +3,6 @@
 package cli
 
 import (
-	"veo/pkg/core/console"
 	"veo/pkg/dirscan"
 	"veo/pkg/fingerprint"
 	"veo/pkg/utils/processor/auth"
@@ -17,7 +16,6 @@ import (
 type CLIApp struct {
 	proxy             *proxy.Proxy
 	collector         *dirscan.Collector
-	consoleManager    *console.ConsoleManager
 	dirscanModule     *dirscan.DirscanModule
 	fingerprintAddon  *fingerprint.FingerprintAddon
 	authLearningAddon *auth.AuthLearningAddon

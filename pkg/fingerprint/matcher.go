@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"veo/pkg/utils/httpclient"
 	"veo/pkg/utils/logger"
 )
 
@@ -97,12 +96,4 @@ func (e *Engine) extractSnippetForDSL(dsl string, ctx *DSLContext) string {
 	}
 	snippet := e.dslParser.ExtractSnippet(dsl, ctx)
 	return snippet
-}
-
-// MatchSpecificRule 匹配指定的单个规则（公开方法，供CLI使用）
-func (e *Engine) MatchSpecificRule(rule *FingerprintRule, response *HTTPResponse, httpClient httpclient.HTTPClientInterface, baseURL string) *FingerprintMatch {
-	// 创建DSL上下文
-	ctx := e.createDSLContextWithClient(response, httpClient, baseURL)
-	// 匹配指定规则
-	return e.matchRule(rule, ctx)
 }

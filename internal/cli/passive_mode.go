@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"veo/internal/core/config"
 	"veo/pkg/fingerprint"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
@@ -70,6 +71,15 @@ func (app *CLIApp) triggerScan() {
 		return
 	}
 
+	// [修复] 从全局配置读取并应用递归深度
+	if reqConfig := config.GetRequestConfig(); reqConfig != nil {
+		depth := reqConfig.Depth
+		addon.SetDepth(depth)
+		if depth > 0 {
+			logger.Infof("被动扫描递归深度设置为: %d", depth)
+		}
+	}
+
 	// 暂停指纹识别插件，避免扫描流量干扰
 	if app.fingerprintAddon != nil {
 		app.fingerprintAddon.Disable()
@@ -81,6 +91,20 @@ func (app *CLIApp) triggerScan() {
 	if err != nil {
 		logger.Errorf("扫描执行失败: %v", err)
 	} else {
+		// [修复] 实时打印扫描结果，保证与主动扫描一致
+		if result != nil && result.FilterResult != nil {
+			// 获取显示配置
+			showSnippet := app.args.VeryVerbose
+			showRule := app.args.Verbose || app.args.VeryVerbose
+
+			// 打印每个有效结果
+			for _, page := range result.FilterResult.ValidPages {
+				if page != nil {
+					printHTTPResponseResult(page, showSnippet, showRule)
+				}
+			}
+		}
+
 		logger.Infof("扫描完成，发现 %d 个有效结果", len(result.FilterResult.ValidPages))
 	}
 

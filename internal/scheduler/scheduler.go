@@ -143,11 +143,6 @@ func (ts *TargetScheduler) ExecuteConcurrentScan() (map[string][]*interfaces.HTT
 	return ts.collectResultsWithTimeout(scanCtx, resultChan, done)
 }
 
-// processTarget 处理单个目标
-func (ts *TargetScheduler) processTarget(index int, target string, resultChan chan<- TargetResult) {
-	ts.processTargetWithTimeout(ts.ctx, index, target, resultChan)
-}
-
 // processTargetWithTimeout 处理单个目标（新增：支持超时和取消）
 func (ts *TargetScheduler) processTargetWithTimeout(ctx context.Context, index int, target string, resultChan chan<- TargetResult) {
 	startTime := time.Now()
@@ -432,11 +427,4 @@ func extractDomainFromURL(rawURL string) string {
 		return rawURL[:47] + "..."
 	}
 	return rawURL
-}
-
-// Stop 停止调度器
-func (ts *TargetScheduler) Stop() {
-	if ts.cancel != nil {
-		ts.cancel()
-	}
 }

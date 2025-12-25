@@ -166,7 +166,6 @@ func buildExcelRow(page interfaces.HTTPResponse, reportType ExcelReportType) []i
 		if match.Matcher != "" {
 			fpRules = append(fpRules, match.Matcher)
 		} else if match.DSLMatched != "" {
-			// 兼容 DSLMatched 字段
 			fpRules = append(fpRules, match.DSLMatched)
 		}
 	}
@@ -211,7 +210,6 @@ func buildExcelRow(page interfaces.HTTPResponse, reportType ExcelReportType) []i
 	return row
 }
 
-// sanitizeSnippet (已移除使用，保留函数或删除均可，建议删除以保持整洁)
 // toValueSlice 将指针切片转换为值切片
 func toValueSlice(pages []*interfaces.HTTPResponse) []interfaces.HTTPResponse {
 	result := make([]interfaces.HTTPResponse, len(pages))

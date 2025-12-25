@@ -30,20 +30,11 @@ func mockLayerScanner(targets []string, filter *ResponseFilter, depth int) ([]in
 	return results, nil
 }
 
-// Mock Fetcher
-func mockFetcher(urls []string) []interfaces.HTTPResponse {
-	var res []interfaces.HTTPResponse
-	for _, u := range urls {
-		res = append(res, interfaces.HTTPResponse{URL: u, StatusCode: 200})
-	}
-	return res
-}
-
 func TestRunRecursiveScan(t *testing.T) {
 	initialTargets := []string{"http://example.com/admin/"}
 	maxDepth := 2 // 测试两层递归
 
-	results, err := RunRecursiveScan(context.Background(), initialTargets, maxDepth, mockLayerScanner, mockFetcher, nil)
+	results, err := RunRecursiveScan(context.Background(), initialTargets, maxDepth, mockLayerScanner, nil)
 	if err != nil {
 		t.Fatalf("RunRecursiveScan failed: %v", err)
 	}

@@ -59,10 +59,3 @@ type PageHash struct {
 	ContentLength int64  `json:"content_length"`
 	ContentType   string `json:"content_type"`
 }
-
-// OpenPortResult represents an open port found by port scanner.
-type OpenPortResult struct {
-	IP      string `json:"ip"`
-	Port    int    `json:"port"`
-	Service string `json:"service,omitempty"`
-}

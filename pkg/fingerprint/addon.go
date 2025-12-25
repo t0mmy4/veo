@@ -27,7 +27,6 @@ type FingerprintAddon struct {
 	probedHosts      map[string]bool                // 已探测的主机缓存
 	probedMutex      sync.RWMutex                   // 缓存锁
 	encodingDetector *EncodingDetector              // 编码检测器
-	allowedHosts     []string                       // 允许的主机列表
 	customHeaders    map[string]string              // 自定义HTTP头部
 	timeout          time.Duration                  // 主动探测超时时间
 }
@@ -62,13 +61,6 @@ func (fa *FingerprintAddon) Requestheaders(f *proxy.Flow) {
 
 	logger.Debugf("Requestheaders方法被调用: %s", f.Request.URL.String())
 
-	// 检查主机是否在黑名单中
-	host := fa.extractHostFromURL(f.Request.URL.String())
-	if !fa.isHostAllowed(host) {
-		logger.Debugf("主机未在允许列表中，跳过请求头处理: %s", host)
-		return
-	}
-
 	// 添加防缓存头部，强制获取最新内容
 	fa.addNoCacheHeaders(f)
 
@@ -82,13 +74,6 @@ func (fa *FingerprintAddon) Requestheaders(f *proxy.Flow) {
 // Response 实现proxy.Addon接口，监听完整响应
 func (fa *FingerprintAddon) Response(f *proxy.Flow) {
 	if !fa.enabled {
-		return
-	}
-
-	// 检查主机是否在黑名单中
-	host := fa.extractHostFromURL(f.Request.URL.String())
-	if !fa.isHostAllowed(host) {
-		logger.Debugf("主机未在允许列表中，跳过指纹识别: %s", host)
 		return
 	}
 
@@ -246,23 +231,6 @@ func (fa *FingerprintAddon) SetHTTPClient(client httpclient.HTTPClientInterface)
 	logger.Debug("HTTP客户端已设置，支持主动探测")
 }
 
-// EnableSnippet 控制指纹结果是否输出匹配片段
-func (fa *FingerprintAddon) EnableSnippet(enabled bool) {
-	if fa.engine != nil {
-		fa.engine.GetConfig().ShowSnippet = enabled
-	}
-}
-
-// EnableRuleLogging 控制是否输出匹配规则内容
-func (fa *FingerprintAddon) EnableRuleLogging(enabled bool) {
-	if fa.engine != nil {
-		// 直接通过OutputFormatter控制
-		if formatter, ok := fa.engine.GetOutputFormatter().(*ConsoleOutputFormatter); ok {
-			formatter.SetShowRules(enabled)
-		}
-	}
-}
-
 // Enable 启用指纹识别
 func (fa *FingerprintAddon) Enable() {
 	fa.enabled = true
@@ -290,20 +258,7 @@ func (fa *FingerprintAddon) GetStats() *Statistics {
 	return fa.engine.GetStats()
 }
 
-// ReloadRules 重新加载规则
-func (fa *FingerprintAddon) ReloadRules() error {
-	return fa.engine.LoadRules(fa.engine.config.RulesPath)
-}
-
 // 辅助方法
-
-// extractHostFromURL 从URL中提取主机名（包含端口）
-func (fa *FingerprintAddon) extractHostFromURL(rawURL string) string {
-	if parsedURL, err := url.Parse(rawURL); err == nil {
-		return parsedURL.Host // 返回 host:port 格式
-	}
-	return rawURL // 解析失败时返回原URL
-}
 
 // extractDomainKey 提取域名键
 func (fa *FingerprintAddon) extractDomainKey(rawURL string) string {
@@ -349,11 +304,6 @@ var (
 	globalFingerprintAddon *FingerprintAddon
 )
 
-// GetGlobalAddon 获取全局指纹识别插件实例
-func GetGlobalAddon() *FingerprintAddon {
-	return globalFingerprintAddon
-}
-
 // SetGlobalAddon 设置全局指纹识别插件实例
 func SetGlobalAddon(addon *FingerprintAddon) {
 	globalFingerprintAddon = addon
@@ -363,11 +313,6 @@ func SetGlobalAddon(addon *FingerprintAddon) {
 func CreateDefaultAddon() (*FingerprintAddon, error) {
 	config := getDefaultConfig()
 	return NewFingerprintAddon(config)
-}
-
-// SetAllowedHosts 设置允许的主机列表
-func (fa *FingerprintAddon) SetAllowedHosts(hosts []string) {
-	fa.allowedHosts = hosts
 }
 
 // SetTimeout 设置主动探测超时时间
@@ -380,17 +325,6 @@ func (fa *FingerprintAddon) SetTimeout(timeout time.Duration) {
 // SetCustomHeaders 设置自定义HTTP头部
 func (fa *FingerprintAddon) SetCustomHeaders(headers map[string]string) {
 	fa.customHeaders = headers
-}
-
-// isHostAllowed 检查主机是否被允许 (简单实现，实际逻辑可能需要更复杂的匹配)
-func (fa *FingerprintAddon) isHostAllowed(host string) bool {
-	// 如果没有设置允许列表，默认允许所有
-	if len(fa.allowedHosts) == 0 {
-		return true
-	}
-	// TODO: 实现更复杂的通配符匹配逻辑，目前简化为包含检查
-	// 这里为了解耦，暂时简化逻辑，实际生产中应该注入一个HostValidator接口
-	return true
 }
 
 // extractAndDecompressBody 提取并解压响应体

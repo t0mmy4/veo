@@ -106,11 +106,6 @@ func (sd *StatsDisplay) IncrementTimeouts() {
 	atomic.AddInt64(&sd.stats.TimeoutCount, 1)
 }
 
-// UpdateRPS 更新RPS
-func (sd *StatsDisplay) UpdateRPS(rps int64) {
-	atomic.StoreInt64(&sd.stats.LastRPS, rps)
-}
-
 // displayLoop 显示循环
 func (sd *StatsDisplay) displayLoop() {
 	var lastCompletedReqs int64

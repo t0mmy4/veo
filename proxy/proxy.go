@@ -4,8 +4,6 @@ package proxy
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"net"
 	"net/http"
 	"net/url"
@@ -31,11 +29,8 @@ type Proxy struct {
 	Version string
 	Addons  []Addon
 
-	entry           *entry
-	attacker        *attacker
-	shouldIntercept func(req *http.Request) bool              // req is received by proxy.server
-	upstreamProxy   func(req *http.Request) (*url.URL, error) // req is received by proxy.server, not client request
-	authProxy       func(res http.ResponseWriter, req *http.Request) (bool, error)
+	entry    *entry
+	attacker *attacker
 }
 
 // proxy.server req context key
@@ -84,22 +79,6 @@ func (proxy *Proxy) Shutdown(ctx context.Context) error {
 	return proxy.entry.shutdown(ctx)
 }
 
-func (proxy *Proxy) GetCertificate() x509.Certificate {
-	return *proxy.attacker.ca.GetRootCA()
-}
-
-func (proxy *Proxy) GetCertificateByCN(commonName string) (*tls.Certificate, error) {
-	return proxy.attacker.ca.GetCert(commonName)
-}
-
-func (proxy *Proxy) SetShouldInterceptRule(rule func(req *http.Request) bool) {
-	proxy.shouldIntercept = rule
-}
-
-func (proxy *Proxy) SetUpstreamProxy(fn func(req *http.Request) (*url.URL, error)) {
-	proxy.upstreamProxy = fn
-}
-
 func (proxy *Proxy) realUpstreamProxy() func(*http.Request) (*url.URL, error) {
 	return func(cReq *http.Request) (*url.URL, error) {
 		req := cReq.Context().Value(proxyReqCtxKey).(*http.Request)
@@ -108,9 +87,6 @@ func (proxy *Proxy) realUpstreamProxy() func(*http.Request) (*url.URL, error) {
 }
 
 func (proxy *Proxy) getUpstreamProxyUrl(req *http.Request) (*url.URL, error) {
-	if proxy.upstreamProxy != nil {
-		return proxy.upstreamProxy(req)
-	}
 	if len(proxy.Opts.Upstream) > 0 {
 		return url.Parse(proxy.Opts.Upstream)
 	}
@@ -131,8 +107,4 @@ func (proxy *Proxy) getUpstreamConn(ctx context.Context, req *http.Request) (net
 		conn, err = (&net.Dialer{}).DialContext(ctx, "tcp", address)
 	}
 	return conn, err
-}
-
-func (proxy *Proxy) SetAuthProxy(fn func(res http.ResponseWriter, req *http.Request) (bool, error)) {
-	proxy.authProxy = fn
 }

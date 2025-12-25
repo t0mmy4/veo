@@ -10,9 +10,8 @@ import (
 
 // AuthDetector 认证检测器
 type AuthDetector struct {
-	detectedSchemes map[string]string // 检测到的认证方案
-	enabled         bool              // 是否启用自动检测
-	mu              sync.RWMutex      // 读写锁
+	detectedSchemes map[string]string // 检测到的认证头部
+	mu              sync.RWMutex
 	OnAuthFound     func(map[string]string)
 }
 
@@ -20,7 +19,6 @@ type AuthDetector struct {
 func NewAuthDetector() *AuthDetector {
 	return &AuthDetector{
 		detectedSchemes: make(map[string]string),
-		enabled:         true,
 	}
 }
 
@@ -31,69 +29,8 @@ func (ad *AuthDetector) SetCallbacks(onAuthFound func(map[string]string)) {
 	ad.OnAuthFound = onAuthFound
 }
 
-// SetEnabled 设置是否启用自动检测
-func (ad *AuthDetector) SetEnabled(enabled bool) {
-	ad.mu.Lock()
-	defer ad.mu.Unlock()
-	ad.enabled = enabled
-	if !enabled {
-		logger.Debug("自动认证检测已禁用")
-	} else {
-		logger.Debug("自动认证检测已启用")
-	}
-}
-
-// IsEnabled 检查是否启用自动检测
-func (ad *AuthDetector) IsEnabled() bool {
-	ad.mu.RLock()
-	defer ad.mu.RUnlock()
-	return ad.enabled
-}
-
-// DetectAuthRequirements 从HTTP响应中检测认证要求
-func (ad *AuthDetector) DetectAuthRequirements(resp *http.Response, url string) map[string]string {
-	ad.mu.RLock()
-	if !ad.enabled {
-		ad.mu.RUnlock()
-		return nil
-	}
-	ad.mu.RUnlock()
-
-	authHeaders := make(map[string]string)
-
-	// 只处理401和403响应
-	if resp.StatusCode != 401 && resp.StatusCode != 403 {
-		return authHeaders
-	}
-
-	logger.Debugf("检测到认证响应: %s [%d]", url, resp.StatusCode)
-
-	// 检测响应中提示的自定义认证头部
-	// 某些API会在401/403响应中通过特定头部提示需要的认证方式
-	customAuthHints := ad.detectCustomAuthHeadersFromResponse(resp)
-	for headerName := range customAuthHints {
-		// 标记需要该头部，但值为空（需要用户提供）
-		authHeaders[headerName] = ""
-		logger.Debugf("检测到需要自定义认证头部: %s (需要用户提供)", headerName)
-	}
-
-	if len(authHeaders) > 0 {
-		ad.updateDetectedSchemes(authHeaders)
-		logger.Debugf("检测到 %d 个认证头部", len(authHeaders))
-	}
-
-	return authHeaders
-}
-
 // LearnFromRequest 从HTTP请求中学习Authorization认证信息（被动代理模式）
 func (ad *AuthDetector) LearnFromRequest(req *http.Request, url string) map[string]string {
-	ad.mu.RLock()
-	if !ad.enabled {
-		ad.mu.RUnlock()
-		return nil
-	}
-	ad.mu.RUnlock()
-
 	authHeaders := make(map[string]string)
 	// logger.Debugf("开始从请求中学习认证头部: %s", url) // Reduce log noise
 
@@ -162,26 +99,6 @@ func (ad *AuthDetector) detectCustomAuthHeaders(req *http.Request) map[string]st
 	return customHeaders
 }
 
-// detectCustomAuthHeadersFromResponse 从HTTP响应中检测自定义认证头部提示
-func (ad *AuthDetector) detectCustomAuthHeadersFromResponse(resp *http.Response) map[string]bool {
-	customHeaders := make(map[string]bool)
-
-	// 检查响应头中是否有提示需要特定认证头部的信息
-	// 例如：X-Required-Auth: X-Access-Token
-	if requiredAuth := resp.Header.Get("X-Required-Auth"); requiredAuth != "" {
-		if ad.isCustomAuthHeader(requiredAuth) {
-			customHeaders[requiredAuth] = true
-			logger.Debugf("响应提示需要认证头部: %s", requiredAuth)
-		}
-	}
-
-	// 检查响应体中的错误信息（某些API会在错误信息中提示需要的头部）
-	// 注意：这里只是标记可能需要的头部，实际值需要用户提供
-	// 可以根据实际需求扩展此逻辑
-
-	return customHeaders
-}
-
 // isCustomAuthHeader 检测是否为自定义认证头部
 func (ad *AuthDetector) isCustomAuthHeader(headerName string) bool {
 	// 自定义认证头部列表（大小写不敏感）
@@ -208,58 +125,6 @@ func (ad *AuthDetector) isCustomAuthHeader(headerName string) bool {
 		}
 	}
 	return false
-}
-
-// GetDetectedSchemes 获取已检测到的认证方案
-func (ad *AuthDetector) GetDetectedSchemes() map[string]string {
-	ad.mu.RLock()
-	defer ad.mu.RUnlock()
-
-	schemes := make(map[string]string)
-	for key, value := range ad.detectedSchemes {
-		schemes[key] = value
-	}
-	return schemes
-}
-
-// ClearDetectedSchemes 清空已检测到的认证方案
-func (ad *AuthDetector) ClearDetectedSchemes() {
-	ad.mu.Lock()
-	defer ad.mu.Unlock()
-	ad.detectedSchemes = make(map[string]string)
-	logger.Debug("已清空检测到的认证方案")
-}
-
-// HasDetectedSchemes 检查是否有检测到的认证方案
-func (ad *AuthDetector) HasDetectedSchemes() bool {
-	ad.mu.RLock()
-	defer ad.mu.RUnlock()
-	return len(ad.detectedSchemes) > 0
-}
-
-// LogDetectionSummary 记录检测摘要
-func (ad *AuthDetector) LogDetectionSummary() {
-	ad.mu.RLock()
-	defer ad.mu.RUnlock()
-
-	if !ad.enabled {
-		logger.Debug("自动认证检测已禁用")
-		return
-	}
-
-	if len(ad.detectedSchemes) == 0 {
-		logger.Debug("未检测到认证要求")
-		return
-	}
-
-	logger.Debugf("检测摘要: 发现 %d 种认证方案", len(ad.detectedSchemes))
-	for scheme, value := range ad.detectedSchemes {
-		if value != "" {
-			logger.Debugf("  %s: %s", scheme, value)
-		} else {
-			logger.Debugf("  %s: (需要用户提供)", scheme)
-		}
-	}
 }
 
 // parseAuthorizationType 解析Authorization头部的认证类型

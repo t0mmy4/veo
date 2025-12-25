@@ -52,11 +52,6 @@ func (e *Engine) GetLoadedSummaryString() string {
 	return e.ruleManager.GetLoadedSummaryString()
 }
 
-// AnalyzeResponse 分析响应包并进行指纹识别（基础版本）
-func (e *Engine) AnalyzeResponse(response *HTTPResponse) []*FingerprintMatch {
-	return e.AnalyzeResponseWithClient(response, nil)
-}
-
 // AnalyzeResponseWithClient 分析响应包并进行指纹识别（增强版，支持icon()函数主动探测）
 func (e *Engine) AnalyzeResponseWithClient(response *HTTPResponse, httpClient httpclient.HTTPClientInterface) []*FingerprintMatch {
 	return e.analyzeResponseInternal(response, httpClient, false)

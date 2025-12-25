@@ -1,7 +1,6 @@
 package fingerprint
 
 import (
-	"fmt"
 	"strings"
 
 	"veo/pkg/utils/formatter"
@@ -225,62 +224,7 @@ func highlightedSnippetLines(snippet, matcher string) []string {
 	return lines
 }
 
-// NullOutputFormatter 空输出格式化器
-// 不进行任何输出,用于需要静默处理的场景
-type NullOutputFormatter struct{}
-
-// NewNullOutputFormatter 创建空输出格式化器
-func NewNullOutputFormatter() *NullOutputFormatter {
-	return &NullOutputFormatter{}
-}
-
-// FormatMatch 实现OutputFormatter接口(空实现)
-func (f *NullOutputFormatter) FormatMatch(matches []*FingerprintMatch, response *HTTPResponse, tags ...string) {
-	// 不输出
-}
-
-// FormatNoMatch 实现OutputFormatter接口(空实现)
-func (f *NullOutputFormatter) FormatNoMatch(response *HTTPResponse) {
-	// 不输出
-}
-
-// ShouldOutput 实现OutputFormatter接口(总是返回false)
-func (f *NullOutputFormatter) ShouldOutput(url string, fingerprintNames []string) bool {
-	return false // 不输出
-}
-
-// SetOutputFormatter 为向后兼容提供的全局设置函数
-// 用于在不修改Engine构造函数的情况下设置输出器
-var globalOutputFormatter OutputFormatter
-
 // SetShowRules 动态控制规则显示
 func (f *ConsoleOutputFormatter) SetShowRules(enabled bool) {
 	f.showRules = enabled
-}
-
-// GetGlobalOutputFormatter 获取全局输出格式化器
-func GetGlobalOutputFormatter() OutputFormatter {
-	return globalOutputFormatter
-}
-
-// GetOutputStats 获取输出统计信息
-func (f *ConsoleOutputFormatter) GetOutputStats() map[string]interface{} {
-	return map[string]interface{}{
-		"cached_urls":  f.deduplicator.Count(),
-		"log_matches":  f.logMatches,
-		"show_snippet": f.showSnippet,
-		"show_rules":   f.showRules,
-	}
-}
-
-// ClearCache 清空去重缓存(用于测试或重置)
-func (f *ConsoleOutputFormatter) ClearCache() {
-	f.deduplicator.Clear()
-}
-
-// String 实现Stringer接口
-func (f *ConsoleOutputFormatter) String() string {
-	stats := f.GetOutputStats()
-	return fmt.Sprintf("ConsoleOutputFormatter{cached=%d, logMatches=%v, snippet=%v, rules=%v}",
-		stats["cached_urls"], stats["log_matches"], stats["show_snippet"], stats["show_rules"])
 }

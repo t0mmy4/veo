@@ -13,20 +13,6 @@ type URLCollectorInterface interface {
 	GetURLCount() int
 }
 
-// RequestProcessorInterface 请求处理器接口
-// 负责处理HTTP请求和响应
-type RequestProcessorInterface interface {
-	// 处理URL列表，返回HTTP响应
-	ProcessURLs(urls []string) []*HTTPResponse
-}
-
-// ResponseFilterInterface 响应过滤器接口
-// 负责过滤和处理HTTP响应
-type ResponseFilterInterface interface {
-	// 过滤响应列表
-	FilterResponses(responses []*HTTPResponse) *FilterResult
-}
-
 // 数据结构定义
 
 // HTTPResponse HTTP响应结构体
@@ -43,16 +29,6 @@ type PageHash = types.PageHash
 
 // 指纹识别相关接口
 
-// FingerprintEngine 指纹识别引擎接口
-type FingerprintEngine interface {
-	// 加载指纹库规则
-	LoadRules(rulesPath string) error
-	// 分析响应并识别技术栈
-	AnalyzeResponse(response *HTTPResponse) []*FingerprintMatch
-	// 获取加载的规则数量
-	GetRulesCount() int
-}
-
 // FingerprintAnalyzer 指纹分析器接口（用于跨模块调用，避免反射）
 type FingerprintAnalyzer interface {
 	// AnalyzeResponseWithClientSilent 分析响应包并进行指纹识别（静默版本）
@@ -61,15 +37,3 @@ type FingerprintAnalyzer interface {
 
 // FingerprintMatch 指纹匹配结果
 type FingerprintMatch = types.FingerprintMatch
-
-// FingerprintRule 指纹识别规则（极简版本，只保留核心字段）
-type FingerprintRule struct {
-	ID        string   `yaml:"-"`         // 规则ID（从YAML key生成）
-	Name      string   `yaml:"-"`         // 规则名称（从YAML key生成）
-	Path      string   `yaml:"path"`      // 需要主动访问的路径（可选）
-	Condition string   `yaml:"condition"` // 条件逻辑 (and/or，默认or)
-	DSL       []string `yaml:"dsl"`       // DSL表达式列表
-}
-
-// FingerprintCallback 指纹识别回调函数类型
-type FingerprintCallback func(match *FingerprintMatch)
