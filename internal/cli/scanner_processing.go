@@ -108,43 +108,6 @@ func (sc *ScanController) processTargetResponses(ctx context.Context, responses 
 	return filterResult.ValidPages, nil
 }
 
-func (sc *ScanController) generateReport(filterResult *interfaces.FilterResult) error {
-	reportPath := strings.TrimSpace(sc.reportPath)
-	if reportPath == "" {
-		logger.Debug("未指定输出路径，跳过报告生成")
-		return nil
-	}
-
-	// 构造配置
-	reportConfig := &ReportConfig{
-		Modules:                sc.args.Modules,
-		OutputPath:             reportPath,
-		ShowFingerprintSnippet: sc.showFingerprintSnippet,
-	}
-
-	// 准备指纹结果（如果有）
-	// 注意：在 finalizeScan 中已经传递了 fingerprintResults，它是 sc.lastFingerprintResults
-	// dirResults 对应 sc.lastDirscanResults
-	// filterResult 包含了 ValidPages，但我们需要分离的 dirscan 和 finger 结果来生成 JSON
-	// 对于 Excel 报告，GenerateReport 内部会使用 filterResult
-
-	var dirResults, fingerResults []interfaces.HTTPResponse
-	if sc.lastDirscanResults != nil {
-		dirResults = sc.lastDirscanResults
-	}
-	if sc.lastFingerprintResults != nil {
-		fingerResults = sc.lastFingerprintResults
-	}
-
-	// 调用统一的报告生成函数
-	err := GenerateReport(reportConfig, dirResults, fingerResults, filterResult, sc.fingerprintEngine)
-	if err != nil {
-		return fmt.Errorf("报告生成失败: %v", err)
-	}
-
-	return nil
-}
-
 func (sc *ScanController) generateConsoleJSON(dirPages, fingerprintPages []interfaces.HTTPResponse, filterResult *interfaces.FilterResult) (string, error) {
 	var matches []types.FingerprintMatch
 	if sc.fingerprintEngine != nil {
@@ -204,7 +167,7 @@ func (sc *ScanController) processResponseBody(resp *interfaces.HTTPResponse) str
 	decompressedBody := sc.decompressResponseBody(rawBody, resp.ResponseHeaders)
 
 	// 步骤2: 字符编码检测和转换
-	convertedBody := sc.encodingDetector.DetectAndConvert(decompressedBody, resp.ContentType)
+	convertedBody := fingerprint.GetEncodingDetector().DetectAndConvert(decompressedBody, resp.ContentType)
 
 	logger.Debugf("响应体处理: %s (原始: %d -> 解压: %d -> 转换: %d bytes)",
 		resp.URL, len(rawBody), len(decompressedBody), len(convertedBody))

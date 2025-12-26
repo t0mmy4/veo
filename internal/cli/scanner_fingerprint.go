@@ -4,12 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"veo/pkg/fingerprint"
 	"veo/pkg/utils/interfaces"
@@ -52,25 +49,6 @@ func (sc *ScanController) runConcurrentFingerprintWithContext(parentCtx context.
 	var allResults []interfaces.HTTPResponse
 	var resultsMu sync.Mutex
 
-	var realtimeFile *os.File
-	if sc.reportPath != "" {
-		ext := filepath.Ext(sc.reportPath)
-		base := strings.TrimSuffix(sc.reportPath, ext)
-		realtimePath := base + "_realtime.csv"
-
-		f, err := os.OpenFile(realtimePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err == nil {
-			realtimeFile = f
-			defer realtimeFile.Close()
-
-			if stat, err := f.Stat(); err == nil && stat.Size() == 0 {
-				f.WriteString("URL,StatusCode,Title,Fingerprint\n")
-			}
-		} else {
-			logger.Warnf("无法创建实时结果文件: %v", err)
-		}
-	}
-
 	maxConcurrent := sc.requestProcessor.GetConfig().MaxConcurrent
 	if maxConcurrent <= 0 {
 		maxConcurrent = 20
@@ -92,10 +70,7 @@ func (sc *ScanController) runConcurrentFingerprintWithContext(parentCtx context.
 				default:
 				}
 
-				taskTimeout := time.Duration(sc.timeoutSeconds) * time.Second
-				if taskTimeout <= 0 {
-					taskTimeout = 3 * time.Second // 防止为0的情况
-				}
+				taskTimeout := sc.requestProcessor.GetConfig().Timeout
 				targetCtx, targetCancel := context.WithTimeout(ctx, taskTimeout)
 				results := sc.processSingleTargetFingerprintWithContext(targetCtx, targetURL)
 				targetCancel()
@@ -126,18 +101,9 @@ func (sc *ScanController) runConcurrentFingerprintWithContext(parentCtx context.
 				resultsMu.Unlock()
 
 				// 实时写入
-				if realtimeFile != nil {
-					for _, res := range resList {
-						var fps []string
-						for _, fp := range res.Fingerprints {
-							fps = append(fps, fp.RuleName)
-						}
-						// 简单的CSV格式化
-						line := fmt.Sprintf("\"%s\",\"%d\",\"%s\",\"%s\"\n",
-							res.URL, res.StatusCode, strings.ReplaceAll(res.Title, "\"", "\"\""), strings.Join(fps, "|"))
-						if _, err := realtimeFile.WriteString(line); err == nil {
-							realtimeFile.Sync()
-						}
+				if sc.realtimeReporter != nil {
+					for i := range resList {
+						_ = sc.realtimeReporter.WriteResponse(&resList[i])
 					}
 				}
 			}
@@ -156,16 +122,9 @@ func (sc *ScanController) runConcurrentFingerprintWithContext(parentCtx context.
 	activeResults := sc.performActiveProbing(ctx, targets)
 	if len(activeResults) > 0 {
 		allResults = append(allResults, activeResults...)
-		if realtimeFile != nil {
-			for _, res := range activeResults {
-				var fps []string
-				for _, fp := range res.Fingerprints {
-					fps = append(fps, fp.RuleName)
-				}
-				line := fmt.Sprintf("\"%s\",\"%d\",\"%s\",\"%s\"\n",
-					res.URL, res.StatusCode, strings.ReplaceAll(res.Title, "\"", "\"\""), strings.Join(fps, "|"))
-				realtimeFile.WriteString(line)
-				realtimeFile.Sync()
+		if sc.realtimeReporter != nil {
+			for i := range activeResults {
+				_ = sc.realtimeReporter.WriteResponse(&activeResults[i])
 			}
 		}
 	}
@@ -339,15 +298,12 @@ func (sc *ScanController) performActiveProbing(ctx context.Context, targets []st
 					logger.Debugf("触发主动探测: %s", probeKey)
 					sc.markHostAsProbed(probeKey)
 
-					probeTimeout := time.Duration(sc.timeoutSeconds) * time.Second
-					if probeTimeout <= 0 {
-						probeTimeout = 3 * time.Second
-					}
+					probeTimeout := sc.requestProcessor.GetConfig().Timeout
 					probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 
 					// 1. Path Probing
 					if hasPathRules {
-						results, err := sc.fingerprintEngine.ExecuteActiveProbing(probeCtx, baseURL, sc.httpClient)
+						results, err := sc.fingerprintEngine.ExecuteActiveProbing(probeCtx, baseURL, sc.requestProcessor)
 						if err != nil {
 							logger.Debugf("Path probing error: %v", err)
 						}
@@ -438,15 +394,12 @@ func (sc *ScanController) perform404PageProbing(ctx context.Context, baseURL str
 	}
 
 	// 策略：完全使用全局超时配置
-	probeTimeout := time.Duration(sc.timeoutSeconds) * time.Second
-	if probeTimeout <= 0 {
-		probeTimeout = 3 * time.Second // 防止为0的情况
-	}
+	probeTimeout := sc.requestProcessor.GetConfig().Timeout
 	// 使用传入的 ctx 作为父 Context
 	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
-	result, err := sc.fingerprintEngine.Execute404Probing(probeCtx, baseURL, sc.httpClient)
+	result, err := sc.fingerprintEngine.Execute404Probing(probeCtx, baseURL, sc.requestProcessor)
 	if err != nil {
 		logger.Debugf("404 probing error: %v", err)
 		return nil

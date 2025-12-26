@@ -2,11 +2,8 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
-	modulepkg "veo/pkg/core/module"
 	"veo/pkg/fingerprint"
 	report "veo/pkg/reporter"
 	"veo/pkg/types"
@@ -21,7 +18,7 @@ type ReportConfig struct {
 	ShowFingerprintSnippet bool
 }
 
-// GenerateReport 生成报告（通用函数）
+// GenerateReport 生成报告（仅实时CSV）
 func GenerateReport(config *ReportConfig, dirResults, fingerprintResults []interfaces.HTTPResponse, filterResult *interfaces.FilterResult, fpEngine *fingerprint.Engine) error {
 	reportPath := strings.TrimSpace(config.OutputPath)
 	if reportPath == "" {
@@ -29,94 +26,13 @@ func GenerateReport(config *ReportConfig, dirResults, fingerprintResults []inter
 		return nil
 	}
 
-	if _, err := os.Stat(reportPath); err == nil {
-		logger.Infof("Override Files: %s", reportPath)
-	}
-
-	finalPath, err := generateCustomReport(config, dirResults, fingerprintResults, filterResult, fpEngine, reportPath)
+	finalPath, err := report.GenerateRealtimeCSVReport(filterResult, reportPath)
 	if err != nil {
 		return fmt.Errorf("报告生成失败: %v", err)
 	}
 
 	logger.Infof("Report Output Success: %s", finalPath)
 	return nil
-}
-
-func generateCustomReport(config *ReportConfig, dirResults, fingerprintResults []interfaces.HTTPResponse, filterResult *interfaces.FilterResult, fpEngine *fingerprint.Engine, outputPath string) (string, error) {
-	logger.Debugf("开始生成自定义报告到: %s", outputPath)
-
-	lowerOutput := strings.ToLower(outputPath)
-	switch {
-	case strings.HasSuffix(lowerOutput, ".json"):
-		// 指纹匹配信息
-		var matches []types.FingerprintMatch
-		if fpEngine != nil {
-			if raw := fpEngine.GetMatches(); len(raw) > 0 {
-				matches = convertFingerprintMatches(raw, config.ShowFingerprintSnippet)
-			}
-		}
-
-		// 确保指纹结果列表不为空（如果只有dirscan结果，filterResult中可能包含所有）
-		if len(fingerprintResults) == 0 && hasModule(config.Modules, string(modulepkg.ModuleFinger)) {
-			fingerprintResults = append(fingerprintResults, toValueSlice(filterResult.ValidPages)...)
-		}
-
-		jsonStr, err := report.GenerateCombinedJSON(dirResults, fingerprintResults, matches)
-		if err != nil {
-			return "", err
-		}
-		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-			return "", fmt.Errorf("创建输出目录失败: %v", err)
-		}
-		if err := os.WriteFile(outputPath, []byte(jsonStr), 0o644); err != nil {
-			return "", fmt.Errorf("写入JSON文件失败: %v", err)
-		}
-		return outputPath, nil
-	case strings.HasSuffix(lowerOutput, ".xlsx"):
-		reportType := determineExcelReportType(config.Modules)
-		return report.GenerateExcelReport(filterResult, reportType, outputPath)
-	default:
-		reportType := determineExcelReportType(config.Modules)
-		deducedPath := outputPath
-		if filepath.Ext(outputPath) == "" {
-			deducedPath = outputPath + ".xlsx"
-		} else {
-			deducedPath = strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + ".xlsx"
-		}
-		logger.Warnf("不支持的报告后缀，默认为xlsx输出: %s", deducedPath)
-		return report.GenerateExcelReport(filterResult, reportType, deducedPath)
-	}
-}
-
-func determineExcelReportType(modules []string) report.ExcelReportType {
-	var hasDirscan, hasFingerprint bool
-	for _, moduleName := range modules {
-		if moduleName == string(modulepkg.ModuleDirscan) {
-			hasDirscan = true
-		}
-		if moduleName == string(modulepkg.ModuleFinger) {
-			hasFingerprint = true
-		}
-	}
-
-	switch {
-	case hasDirscan && hasFingerprint:
-		return report.ExcelReportDirscanAndFingerprint
-	case hasDirscan:
-		return report.ExcelReportDirscan
-	default:
-		return report.ExcelReportFingerprint
-	}
-}
-
-// 辅助函数：检查模块是否存在
-func hasModule(modules []string, module string) bool {
-	for _, m := range modules {
-		if m == module {
-			return true
-		}
-	}
-	return false
 }
 
 func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch, includeSnippet bool) []types.FingerprintMatch {

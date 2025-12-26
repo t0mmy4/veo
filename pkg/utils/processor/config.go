@@ -22,6 +22,17 @@ type RequestConfig struct {
 	ProxyURL        string        // 上游代理URL
 }
 
+const DefaultMaxRedirects = 3
+
+// ApplyRedirectPolicy 统一重定向策略（指纹识别/目录扫描共用）
+func ApplyRedirectPolicy(config *RequestConfig) {
+	if config == nil {
+		return
+	}
+	config.FollowRedirect = true
+	config.MaxRedirects = DefaultMaxRedirects
+}
+
 // ============================================================================
 // 配置相关功能
 // ============================================================================
@@ -41,7 +52,7 @@ func getDefaultConfig() *RequestConfig {
 	maxConcurrent := 50 // 默认并发数
 
 	connectTimeout := 5 * time.Second // 默认连接超时时间
-	maxRedirects := 5
+	maxRedirects := DefaultMaxRedirects
 
 	randomUserAgent := true
 

@@ -158,10 +158,16 @@ func (ug *URLGenerator) generateURLsForBase(baseURL string, recursive bool) {
 
 // extractURLComponents 提取URL组件
 func (ug *URLGenerator) extractURLComponents(parsedURL *url.URL) URLComponents {
+	path := parsedURL.Path
+	if parsedURL.Fragment != "" {
+		// 将 fragment 并入路径，支持 /#/ 这类路由参与目录扫描
+		path = path + "#" + parsedURL.Fragment
+	}
+
 	return URLComponents{
 		Scheme: parsedURL.Scheme,
 		Host:   parsedURL.Host,
-		Path:   parsedURL.Path,
+		Path:   path,
 		Query:  parsedURL.RawQuery,
 	}
 }

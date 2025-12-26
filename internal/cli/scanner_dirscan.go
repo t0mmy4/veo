@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"veo/internal/scheduler"
 	"veo/pkg/dirscan"
@@ -27,17 +26,6 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 		sc.requestProcessor.SetModuleContext(originalContext)
 		sc.requestProcessor.SetBatchMode(originalBatchMode)
 	}()
-
-	// [强制配置] 在运行目录扫描前，强制更新 RequestProcessor 的重定向配置
-	reqConfig := sc.requestProcessor.GetConfig()
-	if !reqConfig.FollowRedirect || reqConfig.MaxRedirects < 3 {
-		reqConfig.FollowRedirect = true
-		if reqConfig.MaxRedirects < 3 {
-			reqConfig.MaxRedirects = 5
-		}
-		sc.requestProcessor.UpdateConfig(reqConfig)
-		logger.Debug("Dirscan模块运行前强制启用重定向跟随 (MaxRedirects=5)")
-	}
 
 	// 模块启动提示
 	dictInfo := "config/dict/common.txt"
@@ -78,18 +66,6 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 func (sc *ScanController) runConcurrentDirscan(ctx context.Context, targets []string, filter *dirscan.ResponseFilter, recursive bool) ([]interfaces.HTTPResponse, error) {
 	logger.Debugf("目标数量: %d", len(targets))
 
-	// 创建目标调度器
-	scheduler := scheduler.NewTargetScheduler(ctx, targets, sc.config)
-	scheduler.SetRecursive(recursive)
-
-	// [新增] 传递CLI超时设置给调度器
-	if sc.timeoutSeconds > 0 {
-		scheduler.SetRequestTimeout(time.Duration(sc.timeoutSeconds) * time.Second)
-	}
-
-	// 设置基础请求处理器，确保统计更新正常工作
-	scheduler.SetBaseRequestProcessor(sc.requestProcessor)
-
 	// [新增] 实时结果处理回调
 	var allResults []interfaces.HTTPResponse
 	var resultsMu sync.Mutex
@@ -100,13 +76,20 @@ func (sc *ScanController) runConcurrentDirscan(ctx context.Context, targets []st
 	printWg.Add(1)
 	go sc.startResultPrinter(printChan, &printWg)
 
-	scheduler.SetResultCallback(func(target string, resp *interfaces.HTTPResponse) {
-		sc.handleRealTimeResult(ctx, target, resp, filter, &allResults, &resultsMu, printChan)
-	})
+	// 创建目标调度器（直接传入所有参数）
+	scheduler := scheduler.NewTargetScheduler(
+		ctx,
+		targets,
+		sc.requestProcessor,
+		recursive,
+		sc.requestProcessor.GetConfig().Timeout,
+		func(target string, resp *interfaces.HTTPResponse) {
+			sc.handleRealTimeResult(ctx, target, resp, filter, &allResults, &resultsMu, printChan)
+		},
+	)
 
-	// 执行并发扫描
-	// 注意：虽然 ExecuteConcurrentScan 返回所有原始结果，但我们已经在回调中处理了有效结果
-	_, err := scheduler.ExecuteConcurrentScan()
+	// 执行并发扫描（callback-only：结果通过回调实时处理）
+	err := scheduler.ExecuteConcurrentScan()
 
 	// 关闭打印通道并等待打印完成
 	close(printChan)
@@ -148,7 +131,7 @@ func (sc *ScanController) runSequentialDirscan(ctx context.Context, targets []st
 
 		// 发起HTTP请求（实时处理）
 		// 使用支持 ctx 的版本，确保 Ctrl+C 能尽快停止当前目标的剩余URL派发
-		sc.requestProcessor.ProcessURLsWithCallbackWithContext(ctx, scanURLs, func(resp *interfaces.HTTPResponse) {
+		sc.requestProcessor.ProcessURLsWithCallbackOnlyWithContext(ctx, scanURLs, func(resp *interfaces.HTTPResponse) {
 			sc.handleRealTimeResult(ctx, target, resp, filter, &allResults, nil, printChan)
 		})
 
@@ -170,7 +153,12 @@ func (sc *ScanController) generateDirscanURLs(target string, recursive bool) []s
 
 	baseURL := fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
 
-	path := strings.Trim(parsedURL.Path, "/")
+	fullPath := parsedURL.Path
+	if parsedURL.Fragment != "" {
+		fullPath = fullPath + "#" + parsedURL.Fragment
+	}
+
+	path := strings.Trim(fullPath, "/")
 	if path == "" {
 		if recursive {
 			return sc.urlGenerator.GenerateRecursiveURLs([]string{baseURL})
@@ -219,6 +207,11 @@ func (sc *ScanController) handleRealTimeResult(ctx context.Context, target strin
 			}
 			*results = append(*results, *page)
 
+			// 写入实时CSV报告
+			if sc.realtimeReporter != nil {
+				_ = sc.realtimeReporter.WriteResponse(page)
+			}
+
 			// 发送到打印通道
 			if printChan != nil {
 				printChan <- page
@@ -239,6 +232,6 @@ func (sc *ScanController) startResultPrinter(printChan <-chan *interfaces.HTTPRe
 		if page == nil {
 			continue
 		}
-		printHTTPResponseResult(page, sc.showFingerprintSnippet, sc.showFingerprintRule)
+		printHTTPResponseResult(page, sc.showFingerprintSnippet, sc.args.Verbose || sc.args.VeryVerbose)
 	}
 }

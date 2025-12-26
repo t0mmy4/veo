@@ -214,12 +214,8 @@ func (e *Engine) getOrCreateRequestProcessor() *requests.RequestProcessor {
 		reqConfig.ProxyURL = e.config.ProxyURL
 	}
 
-	// 2. 始终强制开启重定向跟随，且至少允许5次跳转
-	// 这是目录扫描的核心需求：必须看到最终页面才能正确去重
-	reqConfig.FollowRedirect = true
-	if reqConfig.MaxRedirects < 5 {
-		reqConfig.MaxRedirects = 5
-	}
+	// 2. 统一重定向策略（与指纹识别共用）
+	requests.ApplyRedirectPolicy(reqConfig)
 
 	// 3. 直接更新，无需条件判断，确保配置绝对生效
 	e.requestProcessor.UpdateConfig(reqConfig)

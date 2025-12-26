@@ -2,10 +2,7 @@
 
 package proxy
 
-import (
-	"io"
-	"net/http"
-)
+import "io"
 
 type Addon interface {
 	// A client has connected to mitmproxy. Note that a connection can correspond to multiple HTTP requests.
@@ -40,23 +37,19 @@ type Addon interface {
 
 	// Stream response body modifier
 	StreamResponseModifier(*Flow, io.Reader) io.Reader
-
-	// onAccessProxyServer
-	AccessProxyServer(req *http.Request, res http.ResponseWriter)
 }
 
 // BaseAddon do nothing
 type BaseAddon struct{}
 
-func (addon *BaseAddon) ClientConnected(*ClientConn)                                  {}
-func (addon *BaseAddon) ClientDisconnected(*ClientConn)                               {}
-func (addon *BaseAddon) ServerConnected(*ConnContext)                                 {}
-func (addon *BaseAddon) ServerDisconnected(*ConnContext)                              {}
-func (addon *BaseAddon) TlsEstablishedServer(*ConnContext)                            {}
-func (addon *BaseAddon) Requestheaders(*Flow)                                         {}
-func (addon *BaseAddon) Request(*Flow)                                                {}
-func (addon *BaseAddon) Responseheaders(*Flow)                                        {}
-func (addon *BaseAddon) Response(*Flow)                                               {}
-func (addon *BaseAddon) StreamRequestModifier(f *Flow, in io.Reader) io.Reader        { return in }
-func (addon *BaseAddon) StreamResponseModifier(f *Flow, in io.Reader) io.Reader       { return in }
-func (addon *BaseAddon) AccessProxyServer(req *http.Request, res http.ResponseWriter) {}
+func (addon *BaseAddon) ClientConnected(*ClientConn)                            {}
+func (addon *BaseAddon) ClientDisconnected(*ClientConn)                         {}
+func (addon *BaseAddon) ServerConnected(*ConnContext)                           {}
+func (addon *BaseAddon) ServerDisconnected(*ConnContext)                        {}
+func (addon *BaseAddon) TlsEstablishedServer(*ConnContext)                      {}
+func (addon *BaseAddon) Requestheaders(*Flow)                                   {}
+func (addon *BaseAddon) Request(*Flow)                                          {}
+func (addon *BaseAddon) Responseheaders(*Flow)                                  {}
+func (addon *BaseAddon) Response(*Flow)                                         {}
+func (addon *BaseAddon) StreamRequestModifier(f *Flow, in io.Reader) io.Reader  { return in }
+func (addon *BaseAddon) StreamResponseModifier(f *Flow, in io.Reader) io.Reader { return in }

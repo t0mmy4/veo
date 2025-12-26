@@ -10,24 +10,18 @@ import (
 
 	"veo/pkg/utils/logger"
 	"veo/pkg/utils/network"
-
-	"github.com/lqqyt2423/go-mitmproxy/cert"
 )
 
 type Options struct {
-	Debug             int
 	Addr              string
 	StreamLargeBodies int64 // 当请求或响应体大于此字节时，转为 stream 模式
 	SslInsecure       bool
-	CaRootPath        string
-	NewCaFunc         func() (cert.CA, error) //创建 Ca 的函数
 	Upstream          string
 }
 
 type Proxy struct {
-	Opts    *Options
-	Version string
-	Addons  []Addon
+	Opts   *Options
+	Addons []Addon
 
 	entry    *entry
 	attacker *attacker
@@ -42,9 +36,8 @@ func NewProxy(opts *Options) (*Proxy, error) {
 	}
 
 	proxy := &Proxy{
-		Opts:    opts,
-		Version: "1.8.5",
-		Addons:  make([]Addon, 0),
+		Opts:   opts,
+		Addons: make([]Addon, 0),
 	}
 
 	proxy.entry = newEntry(proxy)
@@ -73,10 +66,6 @@ func (proxy *Proxy) Start() error {
 
 func (proxy *Proxy) Close() error {
 	return proxy.entry.close()
-}
-
-func (proxy *Proxy) Shutdown(ctx context.Context) error {
-	return proxy.entry.shutdown(ctx)
 }
 
 func (proxy *Proxy) realUpstreamProxy() func(*http.Request) (*url.URL, error) {

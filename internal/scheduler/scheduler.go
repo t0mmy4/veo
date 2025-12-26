@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
-	"veo/internal/core/config"
+
 	"veo/pkg/dirscan"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
@@ -17,86 +17,47 @@ type TargetScheduler struct {
 	targets                []string
 	maxTargetWorkers       int
 	urlConcurrentPerTarget int
-	config                 *config.Config
-	results                map[string][]*interfaces.HTTPResponse
-	resultsMu              sync.RWMutex
 	ctx                    context.Context
-	cancel                 context.CancelFunc
 	baseRequestProcessor   *processor.RequestProcessor            // 基础请求处理器（支持统计更新）
 	recursive              bool                                   // 是否递归模式
 	resultCallback         func(string, *interfaces.HTTPResponse) // 结果回调
 	requestTimeout         time.Duration                          // 单次请求超时时间
 }
 
-// TargetWorker 目标工作器
-type TargetWorker struct {
-	id               int
-	target           string
-	urlGenerator     *dirscan.URLGenerator
-	requestProcessor *processor.RequestProcessor
-	ctx              context.Context
-	recursive        bool
-	resultCallback   func(string, *interfaces.HTTPResponse)
-}
-
-// TargetResult 目标扫描结果
-type TargetResult struct {
-	Target    string
-	Responses []*interfaces.HTTPResponse
-	Error     error
-	Duration  time.Duration
-}
-
 // NewTargetScheduler 创建目标调度器
-func NewTargetScheduler(ctx context.Context, targets []string, cfg *config.Config) *TargetScheduler {
-	// 使用传入的 context 创建子 context
-	ctx, cancel := context.WithCancel(ctx)
-
-	// 计算资源分配
-	maxTargetWorkers, urlConcurrentPerTarget := calculateResourceAllocation(targets, cfg)
+func NewTargetScheduler(
+	ctx context.Context,
+	targets []string,
+	baseProcessor *processor.RequestProcessor,
+	recursive bool,
+	requestTimeout time.Duration,
+	callback func(string, *interfaces.HTTPResponse),
+) *TargetScheduler {
+	maxTargetWorkers, urlConcurrentPerTarget := calculateResourceAllocation(targets, baseProcessor)
 
 	return &TargetScheduler{
 		targets:                targets,
 		maxTargetWorkers:       maxTargetWorkers,
 		urlConcurrentPerTarget: urlConcurrentPerTarget,
-		config:                 cfg,
-		results:                make(map[string][]*interfaces.HTTPResponse),
 		ctx:                    ctx,
-		cancel:                 cancel,
-		baseRequestProcessor:   nil, // 初始化为nil，需要外部设置
+		baseRequestProcessor:   baseProcessor,
+		recursive:              recursive,
+		requestTimeout:         requestTimeout,
+		resultCallback:         callback,
 	}
 }
 
-// SetRecursive 设置是否递归模式
-func (ts *TargetScheduler) SetRecursive(recursive bool) {
-	ts.recursive = recursive
-}
-
-// SetBaseRequestProcessor 设置基础请求处理器（支持统计更新）
-func (ts *TargetScheduler) SetBaseRequestProcessor(processor *processor.RequestProcessor) {
-	ts.baseRequestProcessor = processor
-	logger.Debug("设置基础请求处理器，支持统计更新")
-}
-
-// SetResultCallback 设置结果回调函数
-func (ts *TargetScheduler) SetResultCallback(callback func(string, *interfaces.HTTPResponse)) {
-	ts.resultCallback = callback
-}
-
-// SetRequestTimeout 设置请求超时时间
-func (ts *TargetScheduler) SetRequestTimeout(timeout time.Duration) {
-	ts.requestTimeout = timeout
-}
-
-// ExecuteConcurrentScan 执行并发扫描（修复：移除硬编码超时，依赖上下文控制）
-func (ts *TargetScheduler) ExecuteConcurrentScan() (map[string][]*interfaces.HTTPResponse, error) {
-	// 使用传入的 context，不再设置额外的超时时间
-	// 对于大规模扫描，硬编码的超时（如10分钟）会导致任务意外中断
+// ExecuteConcurrentScan 执行并发扫描（callback-only）
+func (ts *TargetScheduler) ExecuteConcurrentScan() error {
 	scanCtx := ts.ctx
+	if ts.resultCallback == nil {
+		return fmt.Errorf("result callback is nil")
+	}
+	if ts.baseRequestProcessor == nil {
+		return fmt.Errorf("base request processor is nil")
+	}
 
 	var wg sync.WaitGroup
-	resultChan := make(chan TargetResult, len(ts.targets))
-
 	// 创建目标工作器信号量
 	targetSem := make(chan struct{}, ts.maxTargetWorkers)
 
@@ -122,37 +83,45 @@ func (ts *TargetScheduler) ExecuteConcurrentScan() (map[string][]*interfaces.HTT
 				return
 			}
 
-			ts.processTargetWithTimeout(scanCtx, index, targetURL, resultChan)
+			ts.processTarget(scanCtx, index, targetURL)
 		}(i, target)
 	}
 
-	// 等待所有目标完成（修复：添加超时保护）
 	done := make(chan struct{})
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Errorf("等待目标完成时panic: %v", r)
-			}
-			close(done)
-		}()
 		wg.Wait()
-		close(resultChan)
+		close(done)
 	}()
 
-	// 收集结果（修复：移除硬编码超时，依赖上下文控制）
-	return ts.collectResultsWithTimeout(scanCtx, resultChan, done)
+	select {
+	case <-done:
+		return nil
+	case <-scanCtx.Done():
+		return scanCtx.Err()
+	}
 }
 
-// processTargetWithTimeout 处理单个目标（新增：支持超时和取消）
-func (ts *TargetScheduler) processTargetWithTimeout(ctx context.Context, index int, target string, resultChan chan<- TargetResult) {
+func (ts *TargetScheduler) processTarget(ctx context.Context, index int, target string) {
 	startTime := time.Now()
-
 	logger.Debugf("开始处理目标 [%d/%d]: %s", index+1, len(ts.targets), target)
 
-	// 创建目标工作器
-	worker := ts.createTargetWorker(index, target)
+	// 确定超时时间
+	timeout := ts.requestTimeout
+	if timeout <= 0 {
+		if cfg := ts.baseRequestProcessor.GetConfig(); cfg != nil {
+			timeout = cfg.Timeout
+		}
+	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
 
-	// 生成扫描URL（添加超时检查）
+	moduleCtx := fmt.Sprintf("target-%s", extractDomainFromURL(target))
+	requestProcessor := ts.baseRequestProcessor.CloneWithContext(moduleCtx, timeout)
+	requestConfig := requestProcessor.GetConfig()
+	requestConfig.MaxConcurrent = ts.urlConcurrentPerTarget
+	logger.Debugf("复用BaseRequestProcessor创建Worker: %s (并发限制: %d)", moduleCtx, ts.urlConcurrentPerTarget)
+
 	select {
 	case <-ctx.Done():
 		logger.Debugf("目标 %s: 生成URL时被取消", target)
@@ -160,24 +129,21 @@ func (ts *TargetScheduler) processTargetWithTimeout(ctx context.Context, index i
 	default:
 	}
 
-	scanURLs := worker.generateScanURLs()
-	if len(scanURLs) == 0 {
-		select {
-		case resultChan <- TargetResult{
-			Target: target,
-			Error:  fmt.Errorf("未生成扫描URL"),
-		}:
-		case <-ctx.Done():
-			logger.Debugf("目标 %s: 发送错误结果时被取消", target)
-		case <-time.After(5 * time.Second):
-			logger.Warnf("目标 %s: 发送错误结果超时", target)
-		}
-		return
+	// 生成扫描URL
+	urlGenerator := dirscan.NewURLGenerator()
+	var scanURLs []string
+	if ts.recursive {
+		scanURLs = urlGenerator.GenerateRecursiveURLs([]string{target})
+	} else {
+		scanURLs = urlGenerator.GenerateURLs([]string{target})
 	}
 
+	if len(scanURLs) == 0 {
+		logger.Warnf("%s 未生成扫描URL", target)
+		return
+	}
 	logger.Debugf("%s 生成了 %d 个扫描URL", target, len(scanURLs))
 
-	// 执行HTTP请求（添加超时检查）
 	select {
 	case <-ctx.Done():
 		logger.Debugf("目标 %s: 执行请求时被取消", target)
@@ -185,161 +151,11 @@ func (ts *TargetScheduler) processTargetWithTimeout(ctx context.Context, index i
 	default:
 	}
 
-	responses := worker.executeRequestsWithTimeout(ctx, scanURLs)
-
-	// 更新已完成主机数统计（每个目标完成时调用一次）
-	if ts.baseRequestProcessor != nil {
-		statsUpdater := ts.baseRequestProcessor.GetStatsUpdater()
-		if statsUpdater != nil {
-			statsUpdater.IncrementCompletedHosts()
-			logger.Debugf("目标 %s 完成，更新已完成主机数", target)
-		}
-	}
-
-	duration := time.Since(startTime)
-	result := TargetResult{
-		Target:    target,
-		Responses: responses,
-		Duration:  duration,
-	}
-
-	// 发送结果（修复：添加超时避免永久阻塞）
-	select {
-	case resultChan <- result:
-		logger.Debugf("目标 %s 处理完成，耗时: %v", target, duration)
-	case <-ctx.Done():
-		logger.Debugf("目标 %s: 发送结果时被取消", target)
-	case <-time.After(10 * time.Second):
-		logger.Warnf("目标 %s: 发送结果超时", target)
-	}
-}
-
-// collectResultsWithTimeout 收集结果（新增：移除硬编码超时）
-func (ts *TargetScheduler) collectResultsWithTimeout(ctx context.Context, resultChan <-chan TargetResult, done <-chan struct{}) (map[string][]*interfaces.HTTPResponse, error) {
-	// 移除总体超时时间，依赖任务自然完成或用户手动取消
-	// timeout := 15 * time.Minute
-
-	for {
-		select {
-		case result, ok := <-resultChan:
-			if !ok {
-				// 结果通道已关闭，所有目标处理完成
-				logger.Debugf("所有目标处理完成，共收集 %d 个结果", len(ts.results))
-				return ts.results, nil
-			}
-
-			if result.Error != nil {
-				logger.Errorf("%s 扫描失败: %v", result.Target, result.Error)
-				continue
-			}
-
-			// [内存优化] 如果有回调且响应列表为空（由回调处理），则不存储结果
-			if len(result.Responses) > 0 {
-				ts.resultsMu.Lock()
-				ts.results[result.Target] = result.Responses
-				ts.resultsMu.Unlock()
-			}
-
-			logger.Debugf("收集到目标 %s 的结果，响应数: %d", result.Target, len(result.Responses))
-
-		case <-done:
-			// 等待goroutine完成
-			logger.Debugf("等待目标处理完成")
-
-		case <-ctx.Done():
-			logger.Warnf("目标调度被取消，已收集 %d 个结果", len(ts.results))
-			return ts.results, ctx.Err()
-
-		case <-time.After(30 * time.Second):
-			// 仅在任务标记为完成但通道未关闭时触发超时
-			// 这里只是为了避免死锁，实际上 channel 关闭会先触发上面的 !ok
-			if isDone(done) {
-				logger.Warnf("目标调度完成信号已发出，但结果收集超时")
-				return ts.results, nil
-			}
-		}
-	}
-}
-
-// isDone 检查 channel 是否已关闭
-func isDone(c <-chan struct{}) bool {
-	select {
-	case <-c:
-		return true
-	default:
-		return false
-	}
-}
-
-// createTargetWorker 创建目标工作器
-func (ts *TargetScheduler) createTargetWorker(id int, target string) *TargetWorker {
-	// 确定超时时间
-	timeout := time.Duration(ts.config.Addon.Request.Timeout) * time.Second
-	// 优先使用手动设置的超时（来自CLI）
-	if ts.requestTimeout > 0 {
-		timeout = ts.requestTimeout
-	}
-
-	var requestProcessor *processor.RequestProcessor
-	moduleCtx := fmt.Sprintf("target-%s", extractDomainFromURL(target))
-
-	// [资源优化] 复用RequestProcessor底层Client
-	if ts.baseRequestProcessor != nil {
-		// CloneWithContext 内部会复制 Config，所以我们可以安全地修改 Clone 后的 Config
-		requestProcessor = ts.baseRequestProcessor.CloneWithContext(moduleCtx, timeout)
-
-		// [关键修复] 更新MaxConcurrent为计算出的每目标并发数
-		// 之前这里使用了全局MaxConcurrent，导致 总并发 = TargetWorkers * GlobalMaxConcurrent，引发并发爆炸
-		// 现在的 CloneWithContext 已经创建了独立的 Config 副本，可以直接修改
-		requestConfig := requestProcessor.GetConfig()
-		requestConfig.MaxConcurrent = ts.urlConcurrentPerTarget
-		// 注意：不要调用 UpdateConfig，因为它会重建 Client。我们只想改变调度层的并发限制。
-
-		logger.Debugf("复用BaseRequestProcessor创建Worker: %s (并发限制: %d)", moduleCtx, ts.urlConcurrentPerTarget)
-	} else {
-		// 回退模式：创建新的处理器（通常不应发生，因为Controller会设置Base）
-		requestConfig := &processor.RequestConfig{
-			Timeout:        timeout,
-			MaxRetries:     3,
-			MaxConcurrent:  ts.urlConcurrentPerTarget,
-			FollowRedirect: true,
-			MaxBodySize:    ts.config.Addon.Request.MaxResponseBodySize,
-		}
-		requestProcessor = processor.NewRequestProcessor(requestConfig)
-		requestProcessor.SetModuleContext(moduleCtx)
-		logger.Debugf("创建新的RequestProcessor (无Base): %s", moduleCtx)
-	}
-
-	return &TargetWorker{
-		id:               id,
-		target:           target,
-		urlGenerator:     dirscan.NewURLGenerator(),
-		requestProcessor: requestProcessor,
-		ctx:              ts.ctx,
-		recursive:        ts.recursive,
-		resultCallback:   ts.resultCallback,
-	}
-}
-
-// generateScanURLs 生成扫描URL
-func (tw *TargetWorker) generateScanURLs() []string {
-	if tw.recursive {
-		// 递归模式：只扫描当前目录层级，不回溯父目录
-		return tw.urlGenerator.GenerateRecursiveURLs([]string{tw.target})
-	}
-	// 默认模式：扫描所有层级
-	return tw.urlGenerator.GenerateURLs([]string{tw.target})
-}
-
-// executeRequestsWithTimeout 执行HTTP请求（新增：支持超时和取消）
-func (tw *TargetWorker) executeRequestsWithTimeout(ctx context.Context, urls []string) []*interfaces.HTTPResponse {
-	// 创建带超时的context，但超时时间设置得更长，或者基于URL数量估算
-	// 简单策略：每个URL给1秒，最少5分钟
-	timeoutDuration := time.Duration(len(urls)) * time.Second
+	// 执行请求
+	timeoutDuration := time.Duration(len(scanURLs)) * time.Second
 	if timeoutDuration < 5*time.Minute {
 		timeoutDuration = 5 * time.Minute
 	}
-	// 设置上限，防止过大，例如最大 24 小时
 	if timeoutDuration > 24*time.Hour {
 		timeoutDuration = 24 * time.Hour
 	}
@@ -347,77 +163,70 @@ func (tw *TargetWorker) executeRequestsWithTimeout(ctx context.Context, urls []s
 	requestCtx, cancel := context.WithTimeout(ctx, timeoutDuration)
 	defer cancel()
 
-	// 使用channel接收结果，支持超时
-	resultChan := make(chan []*interfaces.HTTPResponse, 1)
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Errorf("目标Worker %d 执行请求panic: %v", tw.id, r)
-				resultChan <- nil
-			}
-		}()
-
-		var responses []*interfaces.HTTPResponse
-		if tw.resultCallback != nil {
-			// 如果有回调，使用支持 ctx 的版本，确保取消后不再继续派发剩余URL
-			// [内存优化] 使用回调时，不需要向上层返回所有原始响应，避免内存积压
-			tw.requestProcessor.ProcessURLsWithCallbackWithContext(requestCtx, urls, func(resp *interfaces.HTTPResponse) {
-				tw.resultCallback(tw.target, resp)
-			})
-			responses = []*interfaces.HTTPResponse{} // 返回空切片
-		} else {
-			responses = tw.requestProcessor.ProcessURLsWithContext(requestCtx, urls)
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("目标处理panic: %v, 目标: %s", r, target)
 		}
-		resultChan <- responses
 	}()
 
-	select {
-	case responses := <-resultChan:
-		return responses
-	case <-requestCtx.Done():
-		logger.Warnf("目标Worker %d 执行请求超时或被取消", tw.id)
-		return []*interfaces.HTTPResponse{}
+	requestProcessor.ProcessURLsWithCallbackOnlyWithContext(requestCtx, scanURLs, func(resp *interfaces.HTTPResponse) {
+		ts.resultCallback(target, resp)
+	})
+
+	statsUpdater := ts.baseRequestProcessor.GetStatsUpdater()
+	if statsUpdater != nil {
+		statsUpdater.IncrementCompletedHosts()
+		logger.Debugf("目标 %s 完成，更新已完成主机数", target)
 	}
+
+	logger.Debugf("目标 %s 处理完成，耗时: %v", target, time.Since(startTime))
 }
 
-// calculateResourceAllocation 计算资源分配（重构：统一并发控制）
-func calculateResourceAllocation(targets []string, cfg *config.Config) (int, int) {
+// calculateResourceAllocation 计算资源分配
+func calculateResourceAllocation(targets []string, baseProcessor *processor.RequestProcessor) (int, int) {
 	targetCount := len(targets)
-	totalConcurrent := cfg.Addon.Request.Threads
 
-	// 统一并发控制：使用简化的资源分配策略
-	// 使用配置中的总并发数作为最大目标并发数的基础
-	maxTargetConcurrent := totalConcurrent / 10 // 目标并发数为总并发数的1/10
-	if maxTargetConcurrent < 5 {
-		maxTargetConcurrent = 5 // 最小目标并发数
+	totalConcurrent := 0
+	if baseProcessor != nil {
+		if cfg := baseProcessor.GetConfig(); cfg != nil && cfg.MaxConcurrent > 0 {
+			totalConcurrent = cfg.MaxConcurrent
+		}
 	}
-	if maxTargetConcurrent > 50 {
-		maxTargetConcurrent = 50 // 最大目标并发数限制
+	if totalConcurrent <= 0 {
+		totalConcurrent = 50
 	}
-	minURLConcurrentPerTarget := 5 // 默认每目标最小URL并发数
 
-	// 场景1：单目标 - 全部资源分配给该目标
+	// 单目标：全部资源分配给该目标
 	if targetCount == 1 {
 		return 1, totalConcurrent
 	}
 
-	// 场景2：少量目标 - 平均分配资源
+	// 计算最大目标并发数 (5-50之间)
+	maxTargetConcurrent := totalConcurrent / 10
+	if maxTargetConcurrent < 5 {
+		maxTargetConcurrent = 5
+	} else if maxTargetConcurrent > 50 {
+		maxTargetConcurrent = 50
+	}
+
+	// 确定实际目标并发数和每目标URL并发数
+	var actualTargetWorkers, urlConcurrentPerTarget int
 	if targetCount <= maxTargetConcurrent {
-		urlConcurrentPerTarget := totalConcurrent / targetCount
-		if urlConcurrentPerTarget < minURLConcurrentPerTarget {
-			urlConcurrentPerTarget = minURLConcurrentPerTarget
-		}
-		return targetCount, urlConcurrentPerTarget
+		// 少量目标：平均分配
+		actualTargetWorkers = targetCount
+		urlConcurrentPerTarget = totalConcurrent / targetCount
+	} else {
+		// 大量目标：限制目标并发数
+		actualTargetWorkers = maxTargetConcurrent
+		urlConcurrentPerTarget = totalConcurrent / maxTargetConcurrent
 	}
 
-	// 场景3：大量目标 - 限制目标并发数
-	urlConcurrentPerTarget := totalConcurrent / maxTargetConcurrent
-	if urlConcurrentPerTarget < minURLConcurrentPerTarget {
-		urlConcurrentPerTarget = minURLConcurrentPerTarget
+	// 保证每目标最少有一定请求并发
+	if urlConcurrentPerTarget < 5 {
+		urlConcurrentPerTarget = 5
 	}
 
-	return maxTargetConcurrent, urlConcurrentPerTarget
+	return actualTargetWorkers, urlConcurrentPerTarget
 }
 
 // extractDomainFromURL 从URL中提取域名

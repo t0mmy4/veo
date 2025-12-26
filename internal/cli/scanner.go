@@ -14,7 +14,7 @@ import (
 	modulepkg "veo/pkg/core/module"
 	"veo/pkg/dirscan"
 	"veo/pkg/fingerprint"
-	"veo/pkg/utils/httpclient"
+	reporter "veo/pkg/reporter"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
 	requests "veo/pkg/utils/processor"
@@ -38,24 +38,18 @@ type ScanController struct {
 	config            *config.Config
 	requestProcessor  *requests.RequestProcessor
 	urlGenerator      *dirscan.URLGenerator
-	fingerprintEngine *fingerprint.Engine           // 指纹识别引擎（用于 finger 模块与 dirscan 二次识别）
-	encodingDetector  *fingerprint.EncodingDetector // 编码检测器
-	probedHosts       map[string]bool               // 已探测的主机缓存（用于path探测去重）
-	probedMutex       sync.RWMutex                  // 探测缓存锁
+	fingerprintEngine *fingerprint.Engine // 指纹识别引擎（用于 finger 模块与 dirscan 二次识别）
+	probedHosts       map[string]bool     // 已探测的主机缓存（用于path探测去重）
+	probedMutex       sync.RWMutex        // 探测缓存锁
 	// progressTracker        *FingerprintProgressTracker   // 已移除：统一使用StatsDisplay
 	statsDisplay           *stats.StatsDisplay // 统计显示器
-	lastTargets            []string            // 最近解析的目标列表
 	showFingerprintSnippet bool                // 是否展示指纹匹配内容
-	showFingerprintRule    bool                // 是否展示指纹匹配规则
-	maxConcurrent          int
-	retryCount             int
-	timeoutSeconds         int
 	reportPath             string
 	wordlistPath           string
+	realtimeReporter       *reporter.RealtimeCSVReporter
 
 	lastDirscanResults     []interfaces.HTTPResponse
 	lastFingerprintResults []interfaces.HTTPResponse
-	httpClient             httpclient.HTTPClientInterface // 共享的HTTP客户端
 
 	// 全局去重，防止递归扫描中出现重复的结果
 	displayedURLs   map[string]bool
@@ -88,10 +82,9 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		Timeout:         time.Duration(timeout) * time.Second,
 		MaxRetries:      retry,
 		MaxConcurrent:   threads,
-		MaxRedirects:    3,
-		FollowRedirect:  true,
 		RandomUserAgent: args.RandomUA,
 	}
+	requests.ApplyRedirectPolicy(requestConfig)
 
 	if proxyCfg := config.GetProxyConfig(); proxyCfg != nil && proxyCfg.UpstreamProxy != "" {
 		requestConfig.ProxyURL = proxyCfg.UpstreamProxy
@@ -160,25 +153,34 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		requestProcessor:       requestProcessor,
 		urlGenerator:           dirscan.NewURLGenerator(),
 		fingerprintEngine:      fpEngine,
-		encodingDetector:       fingerprint.GetEncodingDetector(), // 初始化编码检测器
-		probedHosts:            make(map[string]bool),             // 初始化探测缓存
-		statsDisplay:           statsDisplay,                      // 初始化统计显示器
+		probedHosts:            make(map[string]bool), // 初始化探测缓存
+		statsDisplay:           statsDisplay,          // 初始化统计显示器
 		showFingerprintSnippet: snippetEnabled,
-		showFingerprintRule:    ruleEnabled,
-		maxConcurrent:          threads,
-		retryCount:             retry,
-		timeoutSeconds:         timeout,
 		reportPath:             strings.TrimSpace(args.Output),
 		wordlistPath:           strings.TrimSpace(args.Wordlist),
 		displayedURLs:          make(map[string]bool),
 		siteFilters:            make(map[string]*dirscan.ResponseFilter),
 	}
 
-	sc.httpClient = sc.requestProcessor
 	return sc
 }
 
 func (sc *ScanController) Run() error {
+	if strings.TrimSpace(sc.reportPath) != "" {
+		realtimeReporter, err := reporter.NewRealtimeCSVReporter(sc.reportPath)
+		if err != nil {
+			logger.Warnf("无法创建实时CSV报告: %v", err)
+		} else {
+			sc.realtimeReporter = realtimeReporter
+			logger.Infof("Realtime CSV Report: %s", realtimeReporter.Path())
+			defer func() {
+				if err := realtimeReporter.Close(); err != nil {
+					logger.Warnf("关闭实时CSV报告失败: %v", err)
+				}
+			}()
+		}
+	}
+
 	return sc.runActiveMode()
 }
 
@@ -188,8 +190,6 @@ func (sc *ScanController) runActiveMode() error {
 	if err != nil {
 		return fmt.Errorf("Target Parse Error: %v", err)
 	}
-
-	sc.lastTargets = targets
 
 	logger.Debugf("解析到 %d 个目标", len(targets))
 
@@ -325,10 +325,8 @@ func (sc *ScanController) finalizeScan(allResults, dirResults, fingerprintResult
 	sc.lastDirscanResults = dirResults
 	sc.lastFingerprintResults = fingerprintResults
 
-	if sc.reportPath != "" {
-		if err := sc.generateReport(filterResult); err != nil {
-			logger.Errorf("报告生成失败: %v", err)
-		}
+	if sc.realtimeReporter != nil {
+		logger.Infof("Report Output Success: %s", sc.realtimeReporter.Path())
 	}
 
 	if sc.statsDisplay.IsEnabled() {

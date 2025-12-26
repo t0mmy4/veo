@@ -1,10 +1,13 @@
 package httpclient
 
 import (
+	"bytes"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"veo/pkg/utils/logger"
 	"veo/pkg/utils/redirect"
@@ -12,6 +15,7 @@ import (
 	"veo/pkg/utils/useragent"
 
 	"github.com/valyala/fasthttp"
+	"golang.org/x/net/html/charset"
 )
 
 // 接口定义
@@ -94,6 +98,7 @@ func New(config *Config) *Client {
 		TLSConfig: &tls.Config{
 			InsecureSkipVerify: config.SkipTLSVerify,
 			Renegotiation:      tls.RenegotiateOnceAsClient,
+			MinVersion:         tls.VersionTLS10,
 		},
 		DisablePathNormalizing:        true,
 		DisableHeaderNamesNormalizing: true,
@@ -185,6 +190,11 @@ func (c *Client) executeRequestFull(rawURL string, customHeaders map[string]stri
 
 // doRequestInternal 执行单次请求（fasthttp implementation）
 func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]string) (body string, statusCode int, headers map[string][]string, err error) {
+	requestURL := encodeHashInURL(rawURL)
+	if requestURL == "" {
+		return "", 0, nil, fmt.Errorf("empty url")
+	}
+
 	// Acquire objects
 	req := fasthttp.AcquireRequest()
 	resp := fasthttp.AcquireResponse()
@@ -192,7 +202,7 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 	defer fasthttp.ReleaseResponse(resp)
 
 	// Prepare Request
-	req.SetRequestURI(rawURL)
+	req.SetRequestURI(requestURL)
 	req.Header.SetMethod(fasthttp.MethodGet)
 
 	// Default Headers
@@ -234,13 +244,20 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 		headers[k] = append(headers[k], v)
 	})
 
-	// Body Decompression (if needed) & String Conversion
+	// Body Decompression (if needed) & Charset Decoding
 	contentEncoding := string(resp.Header.Peek("Content-Encoding"))
 	var respBody []byte
 	if contentEncoding != "" {
 		respBody = shared.DecompressByEncoding(resp.Body(), contentEncoding)
 	} else {
 		respBody = resp.Body()
+	}
+
+	contentType := string(resp.Header.Peek("Content-Type"))
+	if shouldDecodeBody(contentType, respBody) {
+		if decoded, ok := decodeToUTF8(respBody, contentType); ok {
+			respBody = decoded
+		}
 	}
 
 	// Convert to string (Copy happens here, safe to release Response after)
@@ -254,7 +271,48 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 func (c *Client) handleRequestError(err error) error {
 	errStr := err.Error()
 	if strings.Contains(errStr, "tls:") || strings.Contains(errStr, "x509:") {
-		return fmt.Errorf("TLS连接失败 (可能需要跳过证书验证): %v", err)
+		return fmt.Errorf("TLS握手失败: %v", err)
 	}
 	return fmt.Errorf("请求失败: %v", err)
+}
+
+func encodeHashInURL(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	if !strings.Contains(rawURL, "#") {
+		return rawURL
+	}
+	// 将 '#' 视为路径字符：编码为 %23，避免被当作 fragment 丢弃
+	return strings.ReplaceAll(rawURL, "#", "%23")
+}
+
+func shouldDecodeBody(contentType string, body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if strings.HasPrefix(ct, "text/") || strings.Contains(ct, "application/json") || strings.Contains(ct, "application/xml") || strings.Contains(ct, "application/xhtml+xml") {
+		return strings.Contains(ct, "charset=") || !utf8.Valid(body)
+	}
+	// HTML 场景：部分站点会漏写/写错 Content-Type，但 body 不是 UTF-8
+	if strings.Contains(ct, "html") {
+		return strings.Contains(ct, "charset=") || !utf8.Valid(body)
+	}
+	return false
+}
+
+func decodeToUTF8(body []byte, contentType string) ([]byte, bool) {
+	r, err := charset.NewReader(bytes.NewReader(body), contentType)
+	if err != nil {
+		return nil, false
+	}
+	decoded, err := io.ReadAll(r)
+	if err != nil {
+		return nil, false
+	}
+	if len(decoded) == 0 {
+		return nil, false
+	}
+	return decoded, true
 }

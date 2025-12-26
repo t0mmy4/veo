@@ -1398,6 +1398,7 @@ eyou-mail-system:
   path: "/webroot/decision/login"
   dsl:
     - "contains(body, 'ReportServe\\?op=fs')"
+    - "contains(header, 'webroot/decision')"
     - "contains(body, '/com/fr/web/resources')"
 
 gadspot-nc1000-l10:

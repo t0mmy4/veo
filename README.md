@@ -141,11 +141,8 @@
 # 批量目录扫描 + 指纹识别
 ./veo -l target.txt --stats
 
-# 使用自定义字典、输出 JSON 报告
-./veo -u http://target.com -w dict/custom.txt -o report.json
-
-# 使用自定义字典、输出 Excel 报告（包含两个工作表：有效结果和全部结果）
-./veo -u http://target.com -w dict/custom.txt -o report.xlsx
+# 使用自定义字典、输出实时CSV报告（输出为 report_realtime.csv）
+./veo -u http://target.com -w dict/custom.txt -o report
 
 # 递归目录扫描（深度为2层）
 ./veo -u http://target.com --depth 2
@@ -223,7 +220,7 @@
 
 | 参数 | 默认值 | 说明 | 示例 |
 |------|--------|------|------|
-| `-o`, `--output` | — | 结果输出到文件，支持 `.json`, `.xlsx`。Excel 报告包含两个工作表：过滤结果和全部结果。 | `-o report.xlsx` |
+| `-o`, `--output` | — | 结果输出到文件，统一输出为 `<path>_realtime.csv`。 | `-o report` |
 | `--json` | `false` | 控制台输出 JSON，便于与其他工具集成。 | `--json` |
 
 ## HTTP 与过滤

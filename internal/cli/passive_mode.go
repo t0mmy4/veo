@@ -10,8 +10,7 @@ import (
 	"time"
 
 	"veo/internal/core/config"
-	"veo/pkg/fingerprint"
-	"veo/pkg/utils/interfaces"
+	reporter "veo/pkg/reporter"
 	"veo/pkg/utils/logger"
 )
 
@@ -113,29 +112,24 @@ func (app *CLIApp) triggerScan() {
 		logger.Debug("指纹识别插件已恢复")
 	}
 
-	// 如果指定了 -o 输出路径，则在扫描结束后生成报告
+	// 如果指定了 -o 输出路径，则输出实时CSV报告
 	if app.args.Output != "" {
-		var fpEngine *fingerprint.Engine
-		if app.fingerprintAddon != nil {
-			fpEngine = app.fingerprintAddon.GetEngine()
-		}
-
-		reportConfig := &ReportConfig{
-			Modules:                app.args.Modules,
-			OutputPath:             app.args.Output,
-			ShowFingerprintSnippet: app.args.VeryVerbose,
-		}
-
-		var dirResults, fingerResults []interfaces.HTTPResponse
-		for _, p := range result.FilterResult.ValidPages {
-			if p != nil {
-				dirResults = append(dirResults, *p)
-			}
-		}
-
-		err := GenerateReport(reportConfig, dirResults, fingerResults, result.FilterResult, fpEngine)
+		realtimeReporter, err := reporter.NewRealtimeCSVReporter(app.args.Output)
 		if err != nil {
-			logger.Errorf("报告生成失败: %v", err)
+			logger.Errorf("创建实时CSV报告失败: %v", err)
+		} else {
+			if result != nil && result.FilterResult != nil {
+				for _, page := range result.FilterResult.ValidPages {
+					if page != nil {
+						_ = realtimeReporter.WriteResponse(page)
+					}
+				}
+			}
+			if cerr := realtimeReporter.Close(); cerr != nil {
+				logger.Errorf("关闭实时CSV报告失败: %v", cerr)
+			} else {
+				logger.Infof("Report Output Success: %s", realtimeReporter.Path())
+			}
 		}
 	}
 

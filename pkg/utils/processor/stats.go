@@ -62,9 +62,11 @@ func (rp *RequestProcessor) updateProcessingStats(response *interfaces.HTTPRespo
 	atomic.AddInt64(&stats.ProcessedCount, 1)
 
 	if response != nil {
-		responsesMu.Lock()
-		*responses = append(*responses, response)
-		responsesMu.Unlock()
+		if responses != nil && responsesMu != nil {
+			responsesMu.Lock()
+			*responses = append(*responses, response)
+			responsesMu.Unlock()
+		}
 
 		atomic.AddInt64(&stats.SuccessCount, 1)
 

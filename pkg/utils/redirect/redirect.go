@@ -15,8 +15,8 @@ var (
 	// Simplified Regex for redirects
 	metaRefreshRe    = regexp.MustCompile(`(?is)<meta\s+[^>]*http-equiv\s*=\s*['"]?refresh['"]?[^>]*content\s*=\s*['"]\s*\d*\s*;\s*url\s*=\s*([^'"\s>]+)`)
 	metaRefreshRe2   = regexp.MustCompile(`(?is)<meta\s+[^>]*content\s*=\s*['"]\s*\d*\s*;\s*url\s*=\s*([^'"\s>]+)['"][^>]*http-equiv\s*=\s*['"]?refresh['"]?`)
-	jsLocationRe     = regexp.MustCompile(`(?is)(?:window\.|self\.|top\.|parent\.|document\.|location\s*=)\s*location(?:.href)?\s*=\s*['"]([^'"]+)['"]`)
-	jsLocationFuncRe = regexp.MustCompile(`(?is)(?:window\.|self\.|top\.|parent\.|document\.|location\s*\.)location\.(?:replace|assign)\(\s*['"]([^'"]+)['"]\s*\)`)
+	jsLocationRe     = regexp.MustCompile(`(?is)(?:window\.|self\.|top\.|parent\.|document\.)?location(?:\.href)?\s*=\s*['"]([^'"]+)['"]`)
+	jsLocationFuncRe = regexp.MustCompile(`(?is)(?:window\.|self\.|top\.|parent\.|document\.)?location\.(?:replace|assign)\(\s*['"]([^'"]+)['"]\s*\)`)
 )
 
 // HTTPFetcher 定义最小化HTTP客户端接口
@@ -77,7 +77,15 @@ func Execute(rawURL string, fetcher HTTPFetcherFull, config *Config) (*interface
 	var response *interfaces.HTTPResponse
 	var redirectCount int
 
+	seen := make(map[string]struct{}, config.MaxRedirects+1)
+
 	for {
+		currentKey := normalizeRedirectKey(currentURL)
+		if currentKey == "" {
+			currentKey = currentURL
+		}
+		seen[currentKey] = struct{}{}
+
 		body, statusCode, headers, err := fetcher.MakeRequestFull(currentURL)
 		if err != nil {
 			return nil, err
@@ -125,18 +133,34 @@ func Execute(rawURL string, fetcher HTTPFetcherFull, config *Config) (*interface
 
 		// Client Meta/JS
 		if !isRedirect && statusCode >= 200 {
-			redirectLink := DetectClientRedirectURL(body)
-			if redirectLink != "" {
-				resolvedURL := ResolveRedirectURL(currentURL, redirectLink)
-				if resolvedURL != "" {
-					nextURL = resolvedURL
-					isRedirect = true
-					logger.Debugf("捕获客户端重定向: %s -> %s", currentURL, nextURL)
+			ct := GetHeaderFirst(headers, "Content-Type")
+			if looksLikeHTML(ct, body) {
+				redirectLink := DetectClientRedirectURL(body)
+				redirectLink = normalizeRedirectLink(redirectLink)
+				if redirectLink != "" {
+					resolvedURL := ResolveRedirectURL(currentURL, redirectLink)
+					if resolvedURL != "" {
+						nextURL = resolvedURL
+						isRedirect = true
+						logger.Debugf("捕获客户端重定向: %s -> %s", currentURL, nextURL)
+					}
 				}
 			}
 		}
 
 		if !isRedirect {
+			return response, nil
+		}
+
+		if nextURL == "" || nextURL == currentURL {
+			return response, nil
+		}
+		nextKey := normalizeRedirectKey(nextURL)
+		if nextKey == "" {
+			nextKey = nextURL
+		}
+		if _, ok := seen[nextKey]; ok {
+			logger.Debugf("检测到循环重定向，停止跟随: %s -> %s", currentURL, nextURL)
 			return response, nil
 		}
 
@@ -163,8 +187,11 @@ func FollowClientRedirect(response *interfaces.HTTPResponse, fetcher HTTPFetcher
 	if strings.TrimSpace(redirectBody) == "" {
 		return nil, nil
 	}
+	if !looksLikeHTML(response.ContentType, redirectBody) {
+		return nil, nil
+	}
 
-	redirectURL := DetectClientRedirectURL(redirectBody)
+	redirectURL := normalizeRedirectLink(DetectClientRedirectURL(redirectBody))
 	if redirectURL == "" {
 		return nil, nil
 	}
@@ -209,24 +236,37 @@ func FollowClientRedirect(response *interfaces.HTTPResponse, fetcher HTTPFetcher
 
 // DetectClientRedirectURL 检测HTML/JS中的客户端重定向URL
 func DetectClientRedirectURL(body string) string {
-	if strings.TrimSpace(body) == "" {
+	body = strings.TrimSpace(body)
+	if body == "" {
 		return ""
 	}
 
-	// Meta Refresh
-	if m := metaRefreshRe.FindStringSubmatch(body); len(m) >= 2 {
-		return strings.TrimSpace(m[1])
-	}
-	if m := metaRefreshRe2.FindStringSubmatch(body); len(m) >= 2 {
-		return strings.TrimSpace(m[1])
+	// 限制扫描窗口：避免在大页面/大脚本中被误命中，且降低正则开销
+	const maxScan = 16 * 1024
+	if len(body) > maxScan {
+		body = body[:maxScan]
 	}
 
-	// JS Location
-	if m := jsLocationRe.FindStringSubmatch(body); len(m) >= 2 {
-		return strings.TrimSpace(m[1])
+	lower := strings.ToLower(body)
+
+	// Meta Refresh（仅在包含<meta时尝试）
+	if strings.Contains(lower, "<meta") {
+		if m := metaRefreshRe.FindStringSubmatch(body); len(m) >= 2 {
+			return strings.TrimSpace(m[1])
+		}
+		if m := metaRefreshRe2.FindStringSubmatch(body); len(m) >= 2 {
+			return strings.TrimSpace(m[1])
+		}
 	}
-	if m := jsLocationFuncRe.FindStringSubmatch(body); len(m) >= 2 {
-		return strings.TrimSpace(m[1])
+
+	// JS Location（仅在包含<script时尝试，避免把纯文本/JSON误判为跳转）
+	if strings.Contains(lower, "<script") {
+		if m := jsLocationRe.FindStringSubmatch(body); len(m) >= 2 {
+			return strings.TrimSpace(m[1])
+		}
+		if m := jsLocationFuncRe.FindStringSubmatch(body); len(m) >= 2 {
+			return strings.TrimSpace(m[1])
+		}
 	}
 
 	return ""
@@ -238,6 +278,12 @@ func ResolveRedirectURL(baseRaw, ref string) string {
 	if baseRaw == "" || ref == "" {
 		return ""
 	}
+
+	lowerRef := strings.ToLower(ref)
+	if strings.HasPrefix(lowerRef, "javascript:") || strings.HasPrefix(lowerRef, "data:") {
+		return ""
+	}
+
 	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
 		return ref
 	}
@@ -253,6 +299,73 @@ func ResolveRedirectURL(baseRaw, ref string) string {
 		return ""
 	}
 	return base.ResolveReference(u).String()
+}
+
+func looksLikeHTML(contentType string, body string) bool {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if strings.Contains(ct, "text/html") || strings.Contains(ct, "application/xhtml") {
+		return true
+	}
+
+	b := strings.TrimSpace(body)
+	if b == "" {
+		return false
+	}
+	// 仅用小窗口判断，避免大body下的额外开销
+	if len(b) > 512 {
+		b = b[:512]
+	}
+	lb := strings.ToLower(b)
+	return strings.HasPrefix(lb, "<") && (strings.Contains(lb, "<html") || strings.Contains(lb, "<meta") || strings.Contains(lb, "<script"))
+}
+
+func normalizeRedirectLink(link string) string {
+	link = strings.TrimSpace(link)
+	if link == "" {
+		return ""
+	}
+
+	// 基础健壮性：避免明显不可能/不安全/会引发误判的链接
+	if len(link) > 2048 {
+		return ""
+	}
+	if strings.ContainsAny(link, "\r\n\t") {
+		return ""
+	}
+	if strings.ContainsAny(link, "<>") {
+		return ""
+	}
+
+	lower := strings.ToLower(link)
+	if strings.HasPrefix(lower, "javascript:") || strings.HasPrefix(lower, "data:") {
+		return ""
+	}
+	// 不跟随纯锚点跳转
+	if strings.HasPrefix(link, "#") {
+		return ""
+	}
+	return link
+}
+
+func normalizeRedirectKey(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	u.Fragment = ""
+	if q := u.Query(); len(q) > 0 {
+		for key := range q {
+			if strings.EqualFold(key, "origin") {
+				q.Del(key)
+			}
+		}
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
 }
 
 // ShouldFollowRedirect 判断是否应该跟随重定向（同主机/域名检查）

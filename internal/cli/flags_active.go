@@ -220,7 +220,7 @@ veo - 指纹识别/目录扫描
   --no-filter          完全禁用目录扫描哈希过滤（默认开启）
 
 输出与过滤:
-  -o, --output string  写入报告文件 (.json / .xlsx)
+  -o, --output string  写入实时CSV报告（输出为 <path>_realtime.csv）
   --header string      自定义 HTTP 头部，可重复指定
   -s string            保留的 HTTP 状态码列表
   --update-rules       从云端更新指纹识别规则库

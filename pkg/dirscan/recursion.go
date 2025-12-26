@@ -143,12 +143,6 @@ func ExtractNextLevelTargets(results []interfaces.HTTPResponse, alreadyScanned m
 			targetURL += "/"
 		}
 
-		// 过滤SPA路由（Vue/React等前端路由）
-		if strings.Contains(targetURL, "/#/") {
-			logger.Debugf("跳过前端路由: %s", targetURL)
-			continue
-		}
-
 		// 检查是否已经扫描过
 		if alreadyScanned[targetURL] {
 			continue

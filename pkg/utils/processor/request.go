@@ -49,6 +49,7 @@ func NewRequestProcessor(config *RequestConfig) *RequestProcessor {
 		SkipTLSVerify:  true,
 		ProxyURL:       config.ProxyURL,
 		SameHostOnly:   true, // 默认开启同源限制，后续可通过SetRedirectSameHostOnly修改
+		MaxConcurrent:  config.MaxConcurrent,
 	}
 
 	processor := &RequestProcessor{
@@ -207,6 +208,34 @@ func (rp *RequestProcessor) ProcessURLsWithCallbackWithContext(ctx context.Conte
 	return responses
 }
 
+// ProcessURLsWithCallbackOnly 仅通过回调处理响应，不收集/返回结果
+func (rp *RequestProcessor) ProcessURLsWithCallbackOnly(urls []string, callback func(*interfaces.HTTPResponse)) {
+	rp.ProcessURLsWithCallbackOnlyWithContext(context.Background(), urls, callback)
+}
+
+// ProcessURLsWithCallbackOnlyWithContext 仅通过回调处理响应（可取消），不收集/返回结果
+func (rp *RequestProcessor) ProcessURLsWithCallbackOnlyWithContext(ctx context.Context, urls []string, callback func(*interfaces.HTTPResponse)) {
+	if len(urls) == 0 {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	stats := rp.initializeProcessingStats(len(urls), rp.config.MaxConcurrent, rp.config.RandomUserAgent)
+
+	if rp.statsUpdater != nil {
+		if rp.IsBatchMode() {
+			rp.statsUpdater.AddTotalRequests(int64(len(urls)))
+		} else {
+			rp.statsUpdater.SetTotalRequests(int64(len(urls)))
+		}
+	}
+
+	rp.processURLsConcurrent(ctx, urls, nil, nil, stats, callback)
+	rp.finalizeProcessing(stats)
+}
+
 // processURLsConcurrent 使用 worker pool 并发处理URL列表（支持 ctx 取消）
 func (rp *RequestProcessor) processURLsConcurrent(ctx context.Context, urls []string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats, callback func(*interfaces.HTTPResponse)) {
 	maxConcurrent := rp.config.MaxConcurrent
@@ -214,10 +243,18 @@ func (rp *RequestProcessor) processURLsConcurrent(ctx context.Context, urls []st
 		maxConcurrent = 1
 	}
 
+	workerCount := maxConcurrent
+	if workerCount > len(urls) {
+		workerCount = len(urls)
+	}
+	if workerCount <= 0 {
+		workerCount = 1
+	}
+
 	jobs := make(chan string)
 
 	var wg sync.WaitGroup
-	for i := 0; i < maxConcurrent; i++ {
+	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -401,6 +438,7 @@ func (rp *RequestProcessor) UpdateConfig(config *RequestConfig) {
 		SkipTLSVerify:  true,
 		ProxyURL:       config.ProxyURL,
 		SameHostOnly:   rp.redirectSameHostOnly,
+		MaxConcurrent:  config.MaxConcurrent,
 	}
 	rp.client = httpclient.New(clientConfig)
 
@@ -463,7 +501,27 @@ func (rp *RequestProcessor) isTimeoutOrCanceledError(err error) bool {
 	return timeoutErrorRegex.MatchString(err.Error())
 }
 
-// isRetryableError 判断错误是否可重试（新增：改进重试策略）
+var (
+	retryableErrorKeywords = []string{
+		"timeout", "timed out", "connection reset", "connection refused",
+		"temporary failure", "network unreachable", "host unreachable",
+		"dial timeout", "read timeout", "write timeout", "i/o timeout",
+		"context deadline exceeded", "server closed idle connection",
+		"broken pipe", "connection aborted", "no route to host",
+	}
+	nonRetryableErrorKeywords = []string{
+		"certificate", "tls", "ssl", "x509", "invalid url",
+		"malformed", "parse error", "unsupported protocol",
+		"no such host", "dns", "name resolution",
+	}
+	redirectErrorKeywords = []string{
+		"missing location header for http redirect",
+		"location header",
+		"redirect",
+	}
+)
+
+// isRetryableError 判断错误是否可重试（改进重试策略）
 func (rp *RequestProcessor) isRetryableError(err error) bool {
 	if err == nil {
 		return false
@@ -471,29 +529,13 @@ func (rp *RequestProcessor) isRetryableError(err error) bool {
 
 	errStr := strings.ToLower(err.Error())
 
-	// 可重试的错误类型
-	retryableErrors := []string{
-		"timeout", "timed out", "connection reset", "connection refused",
-		"temporary failure", "network unreachable", "host unreachable",
-		"dial timeout", "read timeout", "write timeout", "i/o timeout",
-		"context deadline exceeded", "server closed idle connection",
-		"broken pipe", "connection aborted", "no route to host",
-	}
-
-	for _, retryableErr := range retryableErrors {
+	for _, retryableErr := range retryableErrorKeywords {
 		if strings.Contains(errStr, retryableErr) {
 			return true
 		}
 	}
 
-	// 不可重试的错误类型
-	nonRetryableErrors := []string{
-		"certificate", "tls", "ssl", "x509", "invalid url",
-		"malformed", "parse error", "unsupported protocol",
-		"no such host", "dns", "name resolution",
-	}
-
-	for _, nonRetryableErr := range nonRetryableErrors {
+	for _, nonRetryableErr := range nonRetryableErrorKeywords {
 		if strings.Contains(errStr, nonRetryableErr) {
 			return false
 		}
@@ -503,7 +545,7 @@ func (rp *RequestProcessor) isRetryableError(err error) bool {
 	return true
 }
 
-// isRedirectError 判断是否为重定向相关的错误（重定向优化）
+// isRedirectError 判断是否为重定向相关的错误
 func (rp *RequestProcessor) isRedirectError(err error) bool {
 	if err == nil {
 		return false
@@ -511,14 +553,7 @@ func (rp *RequestProcessor) isRedirectError(err error) bool {
 
 	errStr := strings.ToLower(err.Error())
 
-	// 检查重定向相关的错误
-	redirectKeywords := []string{
-		"missing location header for http redirect",
-		"location header",
-		"redirect",
-	}
-
-	for _, keyword := range redirectKeywords {
+	for _, keyword := range redirectErrorKeywords {
 		if strings.Contains(errStr, keyword) {
 			return true
 		}

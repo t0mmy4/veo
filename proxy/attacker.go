@@ -49,7 +49,7 @@ type attacker struct {
 }
 
 func newAttacker(proxy *Proxy) (*attacker, error) {
-	ca, err := newCa(proxy.Opts)
+	ca, err := cert.NewSelfSignCA("")
 	if err != nil {
 		return nil, err
 	}
@@ -90,14 +90,6 @@ func newAttacker(proxy *Proxy) (*attacker, error) {
 	}
 
 	return a, nil
-}
-
-func newCa(opts *Options) (cert.CA, error) {
-	newCaFunc := opts.NewCaFunc
-	if newCaFunc != nil {
-		return newCaFunc()
-	}
-	return cert.NewSelfSignCA(opts.CaRootPath)
 }
 
 func (a *attacker) start() error {

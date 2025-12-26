@@ -27,8 +27,7 @@ func extractHost(hostWithPort string) string {
 	return host
 }
 
-// IsTls 检查是否为TLS连接（从helper包迁移）
-func IsTls(buf []byte) bool {
+func isTLS(buf []byte) bool {
 	if len(buf) < 3 {
 		return false
 	}
@@ -191,10 +190,6 @@ func (e *entry) close() error {
 	return e.server.Close()
 }
 
-func (e *entry) shutdown(ctx context.Context) error {
-	return e.server.Shutdown(ctx)
-}
-
 func (e *entry) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	proxy := e.proxy
 
@@ -303,7 +298,7 @@ func (e *entry) httpsDialFirstAttack(res http.ResponseWriter, req *http.Request,
 		// log.Error(err)
 		return
 	}
-	if !IsTls(peek) {
+	if !isTLS(peek) {
 		// todo: http, ws
 		transfer(prefix, conn, cconn)
 		cconn.Close()
@@ -333,7 +328,7 @@ func (e *entry) httpsDialLazyAttack(res http.ResponseWriter, req *http.Request, 
 		return
 	}
 
-	if !IsTls(peek) {
+	if !isTLS(peek) {
 		// todo: http, ws
 		conn, err := proxy.attacker.httpsDial(req.Context(), req)
 		if err != nil {
