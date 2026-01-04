@@ -13,6 +13,7 @@ PROJECT_NAME="veo"
 VERSION=${VERSION:-"v1.0.0"}
 BUILD_DIR="dist"
 RELEASE_DIR="release"
+PASSIVE_BUILD_DIR="${BUILD_DIR}/passive"
 
 # 需要包含的资源文件
 RESOURCE_FILES=(
@@ -71,7 +72,7 @@ veo 发布打包脚本
     --readme            生成README文件
 
 示例:
-    $0                          # 创建所有发布包
+    $0                          # 创建所有发布包（如存在被动构建将自动打包）
     $0 -c                       # 清理发布目录
     $0 -v v2.0.0               # 指定版本创建发布包
 
@@ -98,6 +99,20 @@ check_build_dir() {
     fi
     
     print_info "找到 $binary_count 个可执行文件"
+
+    if [[ -d "$PASSIVE_BUILD_DIR" ]]; then
+        local passive_count=$(find "$PASSIVE_BUILD_DIR" -type f -executable 2>/dev/null | wc -l)
+        if [[ $passive_count -eq 0 ]]; then
+            passive_count=$(find "$PASSIVE_BUILD_DIR" -type f \( -name "*.exe" -o ! -name "*.*" \) | wc -l)
+        fi
+        if [[ $passive_count -eq 0 ]]; then
+            print_warning "被动构建目录存在但未找到可执行文件: $PASSIVE_BUILD_DIR"
+        else
+            print_info "找到 $passive_count 个被动模式可执行文件"
+        fi
+    else
+        print_warning "未找到被动构建目录: $PASSIVE_BUILD_DIR (将仅打包主动模式)"
+    fi
 }
 
 # 检查资源文件
@@ -295,7 +310,7 @@ create_platform_package() {
     # 创建包目录
     mkdir -p "$package_dir"
     
-    # 复制二进制文件
+    # 复制主动模式二进制文件
     local target_binary="${package_dir}/${PROJECT_NAME}${extension}"
     cp "$binary_file" "$target_binary"
     
@@ -304,6 +319,18 @@ create_platform_package() {
         chmod +x "$target_binary"
     fi
     
+    # 复制被动模式二进制文件（若存在）
+    local passive_binary="${PASSIVE_BUILD_DIR}/${filename}"
+    if [[ -f "$passive_binary" ]]; then
+        local passive_target="${package_dir}/${PROJECT_NAME}_passive${extension}"
+        cp "$passive_binary" "$passive_target"
+        if [[ "$os" != "windows" ]]; then
+            chmod +x "$passive_target"
+        fi
+    else
+        print_warning "未找到被动模式二进制: $passive_binary"
+    fi
+
     # 复制资源文件
     for resource in "${RESOURCE_FILES[@]}"; do
         if [[ -e "$resource" ]]; then
@@ -450,6 +477,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -b|--build-dir)
             BUILD_DIR="$2"
+            PASSIVE_BUILD_DIR="${BUILD_DIR}/passive"
             shift 2
             ;;
         -r|--release-dir)
@@ -490,6 +518,7 @@ fi
 
 print_info "版本: $VERSION"
 print_info "构建目录: $BUILD_DIR"
+print_info "被动构建目录: $PASSIVE_BUILD_DIR"
 print_info "发布目录: $RELEASE_DIR"
 echo ""
 
