@@ -20,6 +20,10 @@ import (
 	"veo/pkg/utils/stats"
 )
 
+func isJSONReportPath(path string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(path)), ".json")
+}
+
 // toValueSlice 将指针切片转换为值切片
 func toValueSlice(pages []*interfaces.HTTPResponse) []interfaces.HTTPResponse {
 	result := make([]interfaces.HTTPResponse, 0, len(pages))
@@ -33,15 +37,14 @@ func toValueSlice(pages []*interfaces.HTTPResponse) []interfaces.HTTPResponse {
 
 // ScanController 扫描控制器
 type ScanController struct {
-	args              *CLIArgs
-	config            *config.Config
-	requestProcessor  *requests.RequestProcessor
-	fingerprintEngine *fingerprint.Engine // 指纹识别引擎（用于 finger 模块与 dirscan 二次识别）
-	probedHosts       map[string]bool     // 已探测的主机缓存（用于path探测去重）
-	probedMutex       sync.RWMutex        // 探测缓存锁
-	// progressTracker        *FingerprintProgressTracker   // 已移除：统一使用StatsDisplay
-	statsDisplay           *stats.StatsDisplay // 统计显示器
-	showFingerprintSnippet bool                // 是否展示指纹匹配内容
+	args                   *CLIArgs
+	config                 *config.Config
+	requestProcessor       *requests.RequestProcessor
+	fingerprintEngine      *fingerprint.Engine
+	probedHosts            map[string]bool
+	probedMutex            sync.RWMutex
+	statsDisplay           *stats.StatsDisplay
+	showFingerprintSnippet bool
 	reportPath             string
 	wordlistPath           string
 	realtimeReporter       *reporter.RealtimeCSVReporter
@@ -49,12 +52,9 @@ type ScanController struct {
 	lastDirscanResults     []interfaces.HTTPResponse
 	lastFingerprintResults []interfaces.HTTPResponse
 
-	// 全局去重，防止递归扫描中出现重复的结果
 	displayedURLs   map[string]bool
 	displayedURLsMu sync.Mutex
 
-	// 站点过滤器缓存，确保同一站点的过滤器状态（Hash记录）跨递归层级共享
-	// 收集被过滤的结果（用于报告生成）
 	collectedPrimaryFiltered []interfaces.HTTPResponse
 	collectedStatusFiltered  []interfaces.HTTPResponse
 	collectedResultsMu       sync.Mutex
@@ -82,24 +82,28 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 	}
 	requests.ApplyRedirectPolicy(requestConfig)
 
-	if proxyCfg := config.GetProxyConfig(); proxyCfg != nil && proxyCfg.UpstreamProxy != "" {
-		requestConfig.ProxyURL = proxyCfg.UpstreamProxy
+	proxyURL := strings.TrimSpace(args.Proxy)
+	if proxyURL == "" {
+		if proxyCfg := config.GetProxyConfig(); proxyCfg != nil {
+			proxyURL = strings.TrimSpace(proxyCfg.UpstreamProxy)
+		}
+	}
+	if proxyURL != "" {
+		requestConfig.ProxyURL = proxyURL
 		logger.Debugf("ActiveScan: 设置请求处理器代理: %s", requestConfig.ProxyURL)
 	}
 
-	logger.Debugf("请求处理器并发数设置为: %d", requestConfig.MaxConcurrent)
-	logger.Debugf("请求处理器重试次数设置为: %d", requestConfig.MaxRetries)
-	logger.Debugf("请求处理器超时时间设置为: %v", requestConfig.Timeout)
+	if !args.CheckSimilarOnly {
+		logger.Debugf("请求处理器并发数设置为: %d", requestConfig.MaxConcurrent)
+		logger.Debugf("请求处理器重试次数设置为: %d", requestConfig.MaxRetries)
+		logger.Debugf("请求处理器超时时间设置为: %v", requestConfig.Timeout)
+	}
 
-	// 初始化指纹引擎：
-	// - finger 模块需要它
-	// - dirscan 模块也会用它做二次识别（保持现有行为）
 	var fpEngine *fingerprint.Engine
-	if args.HasModule(string(modulepkg.ModuleFinger)) || args.HasModule(string(modulepkg.ModuleDirscan)) {
+	if !args.CheckSimilarOnly && (args.HasModule(string(modulepkg.ModuleFinger)) || args.HasModule(string(modulepkg.ModuleDirscan))) {
 		fpEngine = fingerprint.NewEngine(nil)
 		if fpEngine != nil {
 			if err := fpEngine.LoadRules(fpEngine.GetConfig().RulesPath); err != nil {
-				// 保持运行（避免 nil panic），但提示用户规则加载失败
 				logger.Warnf("加载指纹规则失败，指纹识别可能无结果: %v", err)
 			}
 		}
@@ -109,6 +113,13 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 
 	if len(args.Modules) == 1 && args.Modules[0] == "finger" {
 		requestProcessor.SetModuleContext("fingerprint")
+	}
+	customHeaders := config.GetCustomHeaders()
+	if len(customHeaders) > 0 {
+		requestProcessor.SetCustomHeaders(customHeaders)
+	}
+	if args.Shiro {
+		requestProcessor.SetShiroCookieEnabled(true)
 	}
 
 	statsDisplay := stats.NewStatsDisplay()
@@ -130,14 +141,17 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		// 创建OutputFormatter并注入到Engine
 		var outputFormatter fingerprint.OutputFormatter
 		if args.JSONOutput {
-			outputFormatter = fingerprint.NewJSONOutputFormatter()
+			jsonFormatter := fingerprint.NewJSONOutputFormatter()
+			jsonFormatter.SetSuppressOutput(true)
+			outputFormatter = jsonFormatter
 		} else {
-			outputFormatter = fingerprint.NewConsoleOutputFormatter(
+			consoleFormatter := fingerprint.NewConsoleOutputFormatter(
 				true,           // logMatches
 				true,           // showSnippet - 始终捕获
 				ruleEnabled,    // showRules
 				snippetEnabled, // consoleSnippetEnabled
 			)
+			outputFormatter = consoleFormatter
 		}
 		fpEngine.GetConfig().OutputFormatter = outputFormatter
 		logger.Debugf("指纹引擎 OutputFormatter 已注入: %T", outputFormatter)
@@ -148,8 +162,8 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		config:                 cfg,
 		requestProcessor:       requestProcessor,
 		fingerprintEngine:      fpEngine,
-		probedHosts:            make(map[string]bool), // 初始化探测缓存
-		statsDisplay:           statsDisplay,          // 初始化统计显示器
+		probedHosts:            make(map[string]bool),
+		statsDisplay:           statsDisplay,
 		showFingerprintSnippet: snippetEnabled,
 		reportPath:             strings.TrimSpace(args.Output),
 		wordlistPath:           strings.TrimSpace(args.Wordlist),
@@ -160,7 +174,7 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 }
 
 func (sc *ScanController) Run() error {
-	if strings.TrimSpace(sc.reportPath) != "" {
+	if strings.TrimSpace(sc.reportPath) != "" && !isJSONReportPath(sc.reportPath) {
 		realtimeReporter, err := reporter.NewRealtimeCSVReporter(sc.reportPath)
 		if err != nil {
 			logger.Warnf("无法创建实时CSV报告: %v", err)
@@ -207,23 +221,26 @@ func (sc *ScanController) attachRealtimeReporter() {
 }
 
 func (sc *ScanController) runActiveMode() error {
-	logger.Debug("启动主动扫描模式")
+	if sc.args == nil || !sc.args.CheckSimilarOnly {
+		logger.Debug("启动主动扫描模式")
+	}
+	originalNetworkCheck := false
+	if sc.args != nil {
+		originalNetworkCheck = sc.args.NetworkCheck
+		if sc.args.CheckSimilar && !sc.args.CheckSimilarOnly {
+			sc.args.NetworkCheck = false
+		}
+	}
+
 	targets, err := sc.parseTargets(sc.args.Targets)
+	if sc.args != nil {
+		sc.args.NetworkCheck = originalNetworkCheck
+	}
 	if err != nil {
 		return fmt.Errorf("Target Parse Error: %v", err)
 	}
 
 	logger.Debugf("解析到 %d 个目标", len(targets))
-
-	// 打印有效性筛选结果
-	if !sc.args.JSONOutput {
-		logger.Infof("Available Hosts: %d", len(targets))
-	}
-
-	if sc.statsDisplay.IsEnabled() {
-		sc.statsDisplay.SetTotalHosts(int64(len(targets)))
-		logger.Debugf("统计显示器：设置总主机数 = %d", len(targets))
-	}
 
 	orderedModules := sc.getOptimizedModuleOrder()
 
@@ -245,7 +262,6 @@ func (sc *ScanController) runActiveMode() error {
 			case <-sigChan:
 				interruptCount++
 				if interruptCount == 1 {
-					logger.Info("正在停止...")
 					cancel()
 					go func() {
 						select {
@@ -264,13 +280,34 @@ func (sc *ScanController) runActiveMode() error {
 		}
 	}()
 
+	if sc.args.CheckSimilarOnly {
+		targets, _ = sc.checkSimilarTargetsWithReport(ctx, targets)
+		for _, target := range targets {
+			fmt.Println(target)
+		}
+		return nil
+	}
+
+	if sc.args.CheckSimilar {
+		targets, _ = sc.checkSimilarTargetsWithReport(ctx, targets)
+	}
+
+	// 打印有效性筛选结果
+	if !sc.args.JSONOutput {
+		logger.Infof("Available Hosts: %d", len(targets))
+	}
+
+	if sc.statsDisplay.IsEnabled() {
+		sc.statsDisplay.SetTotalHosts(int64(len(targets)))
+		logger.Debugf("统计显示器：设置总主机数 = %d", len(targets))
+	}
+
 	// 同步执行：避免 goroutine 写结果、主流程读结果带来的数据竞争
 	allResults, dirscanResults, fingerprintResults := sc.executeModulesSequenceWithContext(ctx, orderedModules, targets)
 
 	return sc.finalizeScan(allResults, dirscanResults, fingerprintResults)
 }
 
-// executeModulesSequenceWithContext 是 executeModulesSequence 的包装，支持Context取消
 func (sc *ScanController) executeModulesSequenceWithContext(ctx context.Context, modules []string, targets []string) ([]interfaces.HTTPResponse, []interfaces.HTTPResponse, []interfaces.HTTPResponse) {
 	var allResults []interfaces.HTTPResponse
 	var dirResults []interfaces.HTTPResponse
@@ -284,7 +321,6 @@ func (sc *ScanController) executeModulesSequenceWithContext(ctx context.Context,
 		// 检查Context是否取消
 		select {
 		case <-ctx.Done():
-			logger.Warn("扫描已取消，停止执行剩余模块")
 			return allResults, dirResults, fingerprintResults
 		default:
 		}
@@ -381,6 +417,17 @@ func (sc *ScanController) finalizeScan(allResults, dirResults, fingerprintResult
 			logger.Errorf("生成JSON输出失败: %v", err)
 		} else {
 			fmt.Println(jsonStr)
+		}
+	}
+
+	if isJSONReportPath(sc.reportPath) {
+		jsonStr, err := sc.generateJSONReport(dirResults, fingerprintResults, filterResult)
+		if err != nil {
+			logger.Errorf("生成JSON报告失败: %v", err)
+		} else if writeErr := os.WriteFile(sc.reportPath, []byte(jsonStr), 0644); writeErr != nil {
+			logger.Errorf("写入JSON报告失败: %v", writeErr)
+		} else {
+			logger.Infof("Report Output Success: %s", sc.reportPath)
 		}
 	}
 

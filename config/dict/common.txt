@@ -105,7 +105,6 @@
 /actuator/httptrace
 /actuator/httptrace/actuator/mappings
 /actuator/hystrix.stream
-/actuator/hystrix.stream/*/actuator/swagger
 /actuator/info
 /actuator/info/actuator/metrics
 /actuator/info;
@@ -575,6 +574,7 @@
 /admin/ueditor/net/controller.ashx?action=catchimage&encode=utf-8
 /api/service/uploadAvatar
 /api/upload
+/ueditor/asp.net/controller.ashx?action=catchimage&encode=utf-8
 /scripts/ueditor/asp.net/controller.ashx?action=catchimage&encode=utf-8
 /content/plugins/ueditor/1.4.3/net/controller.ashx?action=catchimage&encode=utf-8
 /content/plugins/ueditor/net/controller.ashx?action=catchimage&encode=utf-8

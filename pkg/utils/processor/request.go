@@ -30,6 +30,7 @@ type RequestProcessor struct {
 	// HTTP认证头部管理
 	customHeaders        map[string]string // CLI指定的自定义头部
 	redirectSameHostOnly bool              // 是否限制重定向在同主机
+	shiroCookieEnabled   bool              // 是否注入rememberMe Cookie
 }
 
 // 构造函数
@@ -88,6 +89,7 @@ func (rp *RequestProcessor) CloneWithContext(moduleContext string, timeout time.
 		batchMode:            true,
 		customHeaders:        make(map[string]string),
 		redirectSameHostOnly: rp.redirectSameHostOnly,
+		shiroCookieEnabled:   rp.shiroCookieEnabled,
 	}
 
 	// 复制自定义头部
@@ -331,7 +333,7 @@ func (rp *RequestProcessor) RequestOnceWithHeaders(ctx context.Context, rawURL s
 func (rp *RequestProcessor) makeRequestWithHeaders(rawURL string, extraHeaders map[string]string) (*interfaces.HTTPResponse, error) {
 	// 准备头部
 	headers := rp.getDefaultHeaders()
-	shouldRemoveCookie := rp.isDirscanModule()
+	shouldRemoveCookie := rp.isDirscanModule() && !rp.shouldInjectShiroCookie()
 	for k, v := range extraHeaders {
 		if strings.EqualFold(k, "Cookie") && strings.TrimSpace(v) == "" {
 			shouldRemoveCookie = true
@@ -415,6 +417,13 @@ func (rp *RequestProcessor) GetModuleContext() string {
 	return rp.moduleContext
 }
 
+// SetShiroCookieEnabled 控制是否在指纹识别/目录扫描请求中注入rememberMe Cookie
+func (rp *RequestProcessor) SetShiroCookieEnabled(enabled bool) {
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	rp.shiroCookieEnabled = enabled
+}
+
 // SetStatsUpdater 设置统计更新器
 func (rp *RequestProcessor) SetStatsUpdater(updater StatsUpdater) {
 	rp.mu.Lock()
@@ -445,6 +454,14 @@ func (rp *RequestProcessor) IsBatchMode() bool {
 
 // 性能优化：预编译的超时错误正则表达式
 var timeoutErrorRegex = regexp.MustCompile(`(?i)(timeout|timed out|context canceled|context deadline exceeded|dial timeout|read timeout|write timeout|i/o timeout|deadline exceeded|operation was canceled)`)
+
+// IsTimeoutOrCanceledError 判断是否为超时或取消相关的错误（对外提供）
+func IsTimeoutOrCanceledError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return timeoutErrorRegex.MatchString(err.Error())
+}
 
 // isTimeoutOrCanceledError 判断是否为超时或取消相关的错误（性能优化版）
 func (rp *RequestProcessor) isTimeoutOrCanceledError(err error) bool {

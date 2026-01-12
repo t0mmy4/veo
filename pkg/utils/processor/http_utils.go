@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"veo/pkg/utils/httpclient"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
 )
@@ -25,15 +26,14 @@ func (rp *RequestProcessor) getDefaultHeaders() map[string]string {
 		"User-Agent":      rp.getRandomUserAgent(), // 使用随机UserAgent
 		"Accept-Encoding": acceptEncoding,
 	}
-	if !rp.isDirscanModule() {
-		headers["Cookie"] = "rememberMe=1"
-	}
 
 	// 合并认证头部
 	authHeaders := rp.getAuthHeaders()
 	for key, value := range authHeaders {
 		headers[key] = value
 	}
+
+	rp.applyShiroCookie(headers)
 
 	return headers
 }
@@ -68,6 +68,42 @@ func removeCookieHeader(headers map[string]string) {
 func (rp *RequestProcessor) isDirscanModule() bool {
 	context := strings.ToLower(strings.TrimSpace(rp.GetModuleContext()))
 	return strings.HasPrefix(context, "dirscan")
+}
+
+func (rp *RequestProcessor) shouldInjectShiroCookie() bool {
+	rp.mu.RLock()
+	enabled := rp.shiroCookieEnabled
+	context := rp.moduleContext
+	rp.mu.RUnlock()
+
+	if !enabled {
+		return false
+	}
+	context = strings.ToLower(strings.TrimSpace(context))
+	return strings.HasPrefix(context, "dirscan") || strings.HasPrefix(context, "finger")
+}
+
+func (rp *RequestProcessor) applyShiroCookie(headers map[string]string) {
+	if len(headers) == 0 || !rp.shouldInjectShiroCookie() {
+		return
+	}
+
+	for key, value := range headers {
+		if strings.EqualFold(key, "Cookie") {
+			trimmed := strings.TrimSpace(value)
+			if strings.Contains(strings.ToLower(trimmed), "rememberme=1") {
+				return
+			}
+			if trimmed == "" {
+				headers[key] = "rememberMe=1"
+			} else {
+				headers[key] = trimmed + "; rememberMe=1"
+			}
+			return
+		}
+	}
+
+	headers["Cookie"] = "rememberMe=1"
 }
 
 // ============================================================================
@@ -106,6 +142,14 @@ func (rp *RequestProcessor) processResponseBody(rawBody string) string {
 
 // processResponse 处理响应，构建HTTPResponse结构体
 func (rp *RequestProcessor) processResponse(url string, statusCode int, body string, responseHeaders, requestHeaders map[string][]string, startTime time.Time) (*interfaces.HTTPResponse, error) {
+	remoteIP := ""
+	if responseHeaders != nil {
+		if vals, ok := responseHeaders[httpclient.RemoteIPHeaderKey]; ok && len(vals) > 0 {
+			remoteIP = strings.TrimSpace(vals[0])
+			delete(responseHeaders, httpclient.RemoteIPHeaderKey)
+		}
+	}
+
 	// 响应体截断处理
 	finalBody := rp.processResponseBody(body)
 
@@ -151,6 +195,7 @@ func (rp *RequestProcessor) processResponse(url string, statusCode int, body str
 		Body:            finalBody,
 		ResponseHeaders: responseHeaders,
 		RequestHeaders:  requestHeaders,
+		RemoteIP:        remoteIP,
 		BodyDecoded:     decodedBody || rp.GetModuleContext() == "dirscan",
 		Server:          server,
 		IsDirectory:     rp.isDirectoryURL(url),

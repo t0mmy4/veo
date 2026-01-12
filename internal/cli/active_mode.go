@@ -6,7 +6,9 @@ import (
 )
 
 func runActiveScanMode(args *CLIArgs) error {
-	logger.Debug("启动主动扫描模式")
+	if args == nil || !args.CheckSimilarOnly {
+		logger.Debug("启动主动扫描模式")
+	}
 	cfg := config.GetConfig()
 	scanner := NewScanController(args, cfg)
 	return scanner.Run()

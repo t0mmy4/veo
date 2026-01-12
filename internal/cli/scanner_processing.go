@@ -14,11 +14,23 @@ import (
 	sharedutils "veo/pkg/utils/shared"
 )
 
+func (sc *ScanController) generateJSONReport(dirPages, fingerprintPages []interfaces.HTTPResponse, filterResult *interfaces.FilterResult) (string, error) {
+	return sc.generateJSON(dirPages, fingerprintPages, filterResult, true)
+}
+
 func (sc *ScanController) generateConsoleJSON(dirPages, fingerprintPages []interfaces.HTTPResponse, filterResult *interfaces.FilterResult) (string, error) {
+	includeSnippet := sc.showFingerprintSnippet
+	if sc.args != nil && sc.args.JSONOutput {
+		includeSnippet = true
+	}
+	return sc.generateJSON(dirPages, fingerprintPages, filterResult, includeSnippet)
+}
+
+func (sc *ScanController) generateJSON(dirPages, fingerprintPages []interfaces.HTTPResponse, filterResult *interfaces.FilterResult, includeSnippet bool) (string, error) {
 	var matches []types.FingerprintMatch
 	if sc.fingerprintEngine != nil {
 		if raw := sc.fingerprintEngine.GetMatches(); len(raw) > 0 {
-			matches = convertFingerprintMatches(raw, sc.showFingerprintSnippet)
+			matches = convertFingerprintMatches(raw, includeSnippet)
 		}
 	}
 

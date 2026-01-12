@@ -46,11 +46,20 @@ func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch, includeS
 			continue
 		}
 
+		matcher := match.Matcher
+		if matcher == "" {
+			matcher = match.DSLMatched
+		}
+		dslMatched := match.DSLMatched
+		if dslMatched == "" {
+			dslMatched = matcher
+		}
 		convertedMatch := types.FingerprintMatch{
-			URL:       match.URL,
-			RuleName:  match.RuleName,
-			Matcher:   match.DSLMatched,
-			Timestamp: match.Timestamp,
+			URL:        match.URL,
+			RuleName:   match.RuleName,
+			Matcher:    matcher,
+			DSLMatched: dslMatched,
+			Timestamp:  match.Timestamp,
 		}
 		if includeSnippet {
 			convertedMatch.Snippet = match.Snippet

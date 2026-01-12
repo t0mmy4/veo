@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -48,6 +49,9 @@ type Config struct {
 	MaxConcurrent      int               // 最大并发连接数
 	DecompressResponse bool              // 是否解压/解码响应体
 }
+
+// RemoteIPHeaderKey 内部传递远端IP，不参与规则匹配
+const RemoteIPHeaderKey = "X-VEO-Remote-IP"
 
 // DefaultConfig 获取默认HTTP客户端配置（安全扫描优化版）
 func DefaultConfig() *Config {
@@ -251,6 +255,8 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 		return "", 0, nil, c.handleRequestError(err)
 	}
 
+	remoteIP := remoteIPFromAddr(resp.RemoteAddr())
+
 	// Extract Info
 	statusCode = resp.StatusCode()
 
@@ -261,6 +267,9 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 		v := string(value)
 		headers[k] = append(headers[k], v)
 	})
+	if remoteIP != "" {
+		headers[RemoteIPHeaderKey] = []string{remoteIP}
+	}
 
 	// Body Decompression (if needed) & Charset Decoding
 	contentEncoding := string(resp.Header.Peek("Content-Encoding"))
@@ -282,6 +291,20 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 
 	logger.Debugf("Fasthttp请求完成: %s [%d] Size: %d", rawURL, statusCode, len(body))
 	return body, statusCode, headers, nil
+}
+
+func remoteIPFromAddr(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	if tcpAddr, ok := addr.(*net.TCPAddr); ok && tcpAddr.IP != nil {
+		return tcpAddr.IP.String()
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err == nil && host != "" {
+		return host
+	}
+	return addr.String()
 }
 
 // handleRequestError 处理请求错误（统一TLS错误处理）

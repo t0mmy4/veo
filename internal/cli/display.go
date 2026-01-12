@@ -12,6 +12,10 @@ func displayStartupInfo(args *CLIArgs) {
 		veo@Evilc0de
 `)
 
+	if args != nil && args.CheckSimilarOnly {
+		return
+	}
+
 	logger.Debug("模块状态:")
 	logger.Debugf("指纹识别: %s", getModuleStatus(args.HasModule(string(modulepkg.ModuleFinger))))
 	logger.Debugf("目录扫描: %s", getModuleStatus(args.HasModule(string(modulepkg.ModuleDirscan))))

@@ -359,14 +359,6 @@ func (fa *FingerprintAddon) addNoCacheHeaders(f *proxy.Flow) {
 	logger.Debugf("已为请求添加防缓存头部: %s", f.Request.URL.String())
 }
 
-// addFingerprintCookieHeaders 为指纹识别添加自定义Cookie头（新增）
-func (fa *FingerprintAddon) addFingerprintCookieHeaders(f *proxy.Flow) {
-	// 添加指纹识别专用的Cookie头
-	f.Request.Header.Set("Cookie", "rememberMe=1")
-
-	logger.Debugf("已为指纹识别请求添加Cookie头: %s", f.Request.URL.String())
-}
-
 // applyCustomHeaders 应用配置中的自定义HTTP头部
 func (fa *FingerprintAddon) applyCustomHeaders(f *proxy.Flow) {
 	if len(fa.customHeaders) > 0 {

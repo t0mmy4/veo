@@ -35,9 +35,12 @@ type CLIArgs struct {
 	Output string // 报告文件输出路径 (-o, --output)
 	Stats  bool   // 启用实时扫描进度统计显示 (--stats)
 
-	NoColor      bool // 禁用彩色输出 (-no-color)
-	NetworkCheck bool // 启用存活性检测 (--check-alive)
-	JSONOutput   bool // 控制台输出JSON结果 (--json)
+	NoColor          bool // 禁用彩色输出 (-no-color)
+	NetworkCheck     bool // 启用存活性检测 (--check-alive)
+	CheckSimilar     bool // 扫描前进行目标相似性检查 (--check-similar)
+	CheckSimilarOnly bool // 仅执行相似性检查 (--check-similar-only)
+	JSONOutput       bool // 控制台输出JSON结果 (--json)
+	Shiro            bool // Shiro rememberMe测试 (--shiro)
 
 	Verbose     bool // 指纹匹配规则展示开关 (-v)
 	VeryVerbose bool // 指纹匹配内容展示开关 (-vv)
@@ -78,14 +81,17 @@ func ParseCLIArgs() *CLIArgs {
 		output     = flag.String("o", "", "输出报告文件路径 (默认不输出文件)")
 		outputLong = flag.String("output", "", "输出报告文件路径 (默认不输出文件)")
 
-		stats        = flag.Bool("stats", false, "启用实时扫描进度统计显示")
-		verbose      = flag.Bool("v", false, "显示指纹匹配规则内容 (默认关闭，可使用 -v 开启)")
-		veryVerbose  = flag.Bool("vv", false, "显示指纹匹配规则与内容片段 (默认关闭，可使用 -vv 开启)")
-		noProbe      = flag.Bool("np", false, "禁用主动目录指纹识别与404探测 (默认开启)")
-		noProbeLong  = flag.Bool("no-probe", false, "禁用主动目录指纹识别与404探测 (默认开启)")
-		noColor      = flag.Bool("no-color", false, "禁用彩色输出，适用于控制台不支持ANSI的环境")
-		networkCheck = flag.Bool("check-alive", false, "启用存活性检测 (默认关闭)")
-		jsonOutput   = flag.Bool("json", false, "使用JSON格式输出扫描结果，便于与其他工具集成")
+		stats            = flag.Bool("stats", false, "启用实时扫描进度统计显示")
+		verbose          = flag.Bool("v", false, "显示指纹匹配规则内容 (默认关闭，可使用 -v 开启)")
+		veryVerbose      = flag.Bool("vv", false, "显示指纹匹配规则与内容片段 (默认关闭，可使用 -vv 开启)")
+		noProbe          = flag.Bool("np", false, "禁用主动目录指纹识别与404探测 (默认开启)")
+		noProbeLong      = flag.Bool("no-probe", false, "禁用主动目录指纹识别与404探测 (默认开启)")
+		noColor          = flag.Bool("no-color", false, "禁用彩色输出，适用于控制台不支持ANSI的环境")
+		networkCheck     = flag.Bool("check-alive", false, "启用存活性检测 (默认关闭)")
+		checkSimilar     = flag.Bool("check-similar", false, "扫描前进行目标相似性检查并去重 (默认关闭)")
+		checkSimilarOnly = flag.Bool("check-similar-only", false, "仅执行相似性检查，不进行指纹识别和目录扫描 (默认关闭)")
+		jsonOutput       = flag.Bool("json", false, "使用JSON格式输出扫描结果，便于与其他工具集成")
+		shiro            = flag.Bool("shiro", false, "在指纹识别/目录扫描请求头中添加 Cookie: rememberMe=1 (默认关闭)")
 
 		statusCodes = flag.String("s", "", "指定需要保留的HTTP状态码，逗号分隔 (例如: -s 200,301,302)")
 
@@ -118,17 +124,20 @@ func ParseCLIArgs() *CLIArgs {
 		Proxy:      *proxy,
 		Debug:      *debug,
 
-		Threads:      getMaxInt(*threads, *threadsLong),
-		Retry:        *retry,
-		Timeout:      *timeout,
-		Output:       getStringValue(*output, *outputLong),
-		Stats:        *stats,
-		Verbose:      *verbose,
-		VeryVerbose:  *veryVerbose,
-		NoProbe:      *noProbe || *noProbeLong,
-		NoColor:      *noColor,
-		NetworkCheck: *networkCheck,
-		JSONOutput:   *jsonOutput,
+		Threads:          getMaxInt(*threads, *threadsLong),
+		Retry:            *retry,
+		Timeout:          *timeout,
+		Output:           getStringValue(*output, *outputLong),
+		Stats:            *stats,
+		Verbose:          *verbose,
+		VeryVerbose:      *veryVerbose,
+		NoProbe:          *noProbe || *noProbeLong,
+		NoColor:          *noColor,
+		NetworkCheck:     *networkCheck,
+		CheckSimilar:     *checkSimilar,
+		CheckSimilarOnly: *checkSimilarOnly,
+		JSONOutput:       *jsonOutput,
+		Shiro:            *shiro,
 
 		Headers: []string(headers),
 
@@ -214,6 +223,9 @@ veo - 指纹识别/目录扫描
   -vv                显示指纹匹配规则及匹配片段
   -np, --no-probe    禁用主动目录指纹识别与404探测
   --check-alive      启用存活性检测 (默认关闭)
+  --check-similar    扫描前进行目标相似性检查并去重 (默认关闭)
+  --check-similar-only 仅执行相似性检查，不进行指纹识别和目录扫描 (默认关闭)
+  --shiro            在指纹识别/目录扫描请求头中添加 Cookie: rememberMe=1 (默认关闭)
   --no-color         禁用彩色输出
   --json             控制台输出 JSON
   -ua bool           是否启用随机User-Agent 池 (默认 true，使用 -ua=false 关闭)
@@ -251,6 +263,9 @@ func validateArgs(args *CLIArgs) error {
 	}
 
 	if args.Listen {
+		if args.CheckSimilarOnly {
+			return fmt.Errorf("相似性检查模式不支持被动代理 (--check-similar-only)")
+		}
 		if args.Port <= 0 || args.Port > 65535 {
 			return fmt.Errorf("端口必须在1-65535范围内，当前值: %d", args.Port)
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -40,9 +41,7 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 	// 获取所有包含path字段的规则和header规则
 	pathRules := e.ruleManager.GetPathRules()
 	headerOnlyRules := e.ruleManager.GetHeaderRules()
-	totalPaths := e.ruleManager.GetPathRulesCount()
-
-	if totalPaths == 0 && len(headerOnlyRules) == 0 {
+	if len(pathRules) == 0 && len(headerOnlyRules) == 0 {
 		logger.Debug("没有需要主动探测的规则，跳过主动探测")
 		return nil, nil
 	}
@@ -55,21 +54,45 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 	var results []*ProbeResult
 	var resultsMu sync.Mutex
 
-	// 任务列表
-	type task struct {
-		rule *FingerprintRule
-		path string
+	// 任务列表（按URL+请求头合并）
+	type probeTask struct {
+		url     string
+		headers map[string]string
+		rules   []*FingerprintRule
 	}
-	var tasks []task
+	taskMap := make(map[string]*probeTask)
+
+	addTask := func(probeURL string, headers map[string]string, rule *FingerprintRule) {
+		key := buildProbeTaskKey(probeURL, headers)
+		task := taskMap[key]
+		if task == nil {
+			task = &probeTask{
+				url:     probeURL,
+				headers: headers,
+			}
+			taskMap[key] = task
+		}
+		task.rules = append(task.rules, rule)
+	}
 
 	for _, rule := range pathRules {
+		seenPaths := make(map[string]struct{}, len(rule.Paths))
+		headers := rule.GetHeaderMap()
 		for _, p := range rule.Paths {
-			tasks = append(tasks, task{rule: rule, path: strings.TrimSpace(p)})
+			path := strings.TrimSpace(p)
+			if path == "" {
+				continue
+			}
+			if _, ok := seenPaths[path]; ok {
+				continue
+			}
+			seenPaths[path] = struct{}{}
+			addTask(joinURLPath(baseURL, path), headers, rule)
 		}
 	}
 	// Header规则作为根路径任务添加
 	for _, rule := range headerOnlyRules {
-		tasks = append(tasks, task{rule: rule, path: "/"})
+		addTask(joinURLPath(baseURL, "/"), rule.GetHeaderMap(), rule)
 	}
 
 	// 并发控制
@@ -79,7 +102,11 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 	}
 
 	// 任务通道
-	taskChan := make(chan task, len(tasks))
+	tasks := make([]*probeTask, 0, len(taskMap))
+	for _, task := range taskMap {
+		tasks = append(tasks, task)
+	}
+	taskChan := make(chan *probeTask, len(tasks))
 	for _, t := range tasks {
 		taskChan <- t
 	}
@@ -101,23 +128,15 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 						return
 					}
 
-					probeURL := joinURLPath(baseURL, tk.path)
-
-					// 构造Headers
-					var headers map[string]string
-					if tk.rule.HasHeaders() {
-						headers = tk.rule.GetHeaderMap()
-					}
-
 					// 发起请求
-					body, statusCode, err := makeRequestWithOptionalHeaders(httpClient, probeURL, headers)
+					body, statusCode, err := makeRequestWithOptionalHeaders(httpClient, tk.url, tk.headers)
 					if err != nil {
 						continue
 					}
 
 					// 构造响应对象
 					resp := &HTTPResponse{
-						URL:             probeURL,
+						URL:             tk.url,
 						Method:          "GET",
 						StatusCode:      statusCode,
 						ResponseHeaders: make(map[string][]string),
@@ -129,11 +148,17 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 
 					// 匹配规则
 					dslCtx := e.createDSLContextWithClient(resp, httpClient, baseURL)
-					if match := e.matchRule(tk.rule, dslCtx); match != nil {
+					var matches []*FingerprintMatch
+					for _, rule := range tk.rules {
+						if match := e.matchRule(rule, dslCtx); match != nil {
+							matches = append(matches, match)
+						}
+					}
+					if len(matches) > 0 {
 						resultsMu.Lock()
 						results = append(results, &ProbeResult{
 							Response: resp,
-							Matches:  []*FingerprintMatch{match},
+							Matches:  matches,
 						})
 						resultsMu.Unlock()
 					}
@@ -144,6 +169,29 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 
 	wg.Wait()
 	return results, nil
+}
+
+func buildProbeTaskKey(probeURL string, headers map[string]string) string {
+	if len(headers) == 0 {
+		return probeURL
+	}
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return strings.ToLower(strings.TrimSpace(keys[i])) < strings.ToLower(strings.TrimSpace(keys[j]))
+	})
+	var builder strings.Builder
+	builder.Grow(len(probeURL) + len(keys)*8)
+	builder.WriteString(probeURL)
+	for _, key := range keys {
+		builder.WriteByte('|')
+		builder.WriteString(strings.ToLower(strings.TrimSpace(key)))
+		builder.WriteByte(':')
+		builder.WriteString(strings.TrimSpace(headers[key]))
+	}
+	return builder.String()
 }
 
 // ExecuteIconProbing 执行Icon主动探测（同步返回结果）

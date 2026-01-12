@@ -178,14 +178,14 @@ func startApplication(args *CLIArgs) error {
 
 	// 模块间依赖注入：为指纹主动探测注入统一HTTP客户端
 	if app.fingerprintAddon != nil {
-		injectFingerprintHTTPClient(app.fingerprintAddon)
+		injectFingerprintHTTPClient(app.fingerprintAddon, args.Shiro)
 	}
 
 	logger.Debug("模块启动和依赖注入完成")
 	return nil
 }
 
-func injectFingerprintHTTPClient(addon *fingerprint.FingerprintAddon) {
+func injectFingerprintHTTPClient(addon *fingerprint.FingerprintAddon, shiro bool) {
 	if addon == nil {
 		return
 	}
@@ -214,6 +214,9 @@ func injectFingerprintHTTPClient(addon *fingerprint.FingerprintAddon) {
 
 	requestProcessor := requests.NewRequestProcessor(procConfig)
 	requestProcessor.SetModuleContext("fingerprint-passive")
+	if shiro {
+		requestProcessor.SetShiroCookieEnabled(true)
+	}
 
 	addon.SetHTTPClient(requestProcessor)
 	addon.SetTimeout(procConfig.Timeout)

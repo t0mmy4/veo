@@ -114,8 +114,6 @@ func (e *Engine) PerformScanWithFilter(ctx context.Context, collectorInstance in
 		if firstResponseURL == "" {
 			firstResponseURL = resp.URL
 		}
-		// 转换并过滤
-		// 注意：这里我们构造一个单元素的切片进行处理
 		filterInput := []*interfaces.HTTPResponse{resp}
 		singleResult := responseFilter.FilterResponses(filterInput)
 		if singleResult == nil {
@@ -123,8 +121,6 @@ func (e *Engine) PerformScanWithFilter(ctx context.Context, collectorInstance in
 			return
 		}
 
-		// 实时输出有效页面
-		// 累积结果 (线程安全)
 		resultMu.Lock()
 		if len(singleResult.ValidPages) > 0 {
 			finalFilterResult.ValidPages = append(finalFilterResult.ValidPages, singleResult.ValidPages...)
@@ -153,9 +149,6 @@ func (e *Engine) PerformScanWithFilter(ctx context.Context, collectorInstance in
 	if responseFilter != nil {
 		finalFilterResult.InvalidPageHashes = responseFilter.GetInvalidPageHashes()
 	}
-	// 注意：这里我们假设过滤器是 HashFilter，如果接口支持的话
-	// 实际上 ResponseFilter 封装了这些细节，但 GetHashFilter 方法在 ResponseFilter 中有导出
-
 	atomic.StoreInt64(&e.stats.FilteredResults, int64(len(finalFilterResult.ValidPages)))
 	logger.Debugf("过滤完成 - 总响应: %d, 有效结果: %d",
 		totalResponses, len(finalFilterResult.ValidPages))

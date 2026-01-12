@@ -46,11 +46,13 @@ func (e *Engine) matchRule(rule *FingerprintRule, ctx *DSLContext) *FingerprintM
 					}
 				}
 			}
+			matchedExpr := fmt.Sprintf("AND(%s)", strings.Join(matchedDSLs, " && "))
 			return &FingerprintMatch{
 				URL:        ctx.URL,
 				RuleName:   rule.Name,
 				Technology: rule.Name,
-				DSLMatched: fmt.Sprintf("AND(%s)", strings.Join(matchedDSLs, " && ")),
+				Matcher:    matchedExpr,
+				DSLMatched: matchedExpr,
 				Timestamp:  time.Now(),
 				Snippet:    snippet,
 			}
@@ -72,6 +74,7 @@ func (e *Engine) matchRule(rule *FingerprintRule, ctx *DSLContext) *FingerprintM
 					URL:        ctx.URL,
 					RuleName:   rule.Name,
 					Technology: rule.Name,
+					Matcher:    dsl,
 					DSLMatched: dsl,
 					Timestamp:  time.Now(),
 					Snippet:    snippet,

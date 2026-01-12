@@ -12,6 +12,7 @@ import (
 type JSONOutputFormatter struct {
 	deduplicator *Deduplicator
 	onOutput     func(response *HTTPResponse, matches []*FingerprintMatch, tags []string)
+	suppress     bool
 }
 
 // NewJSONOutputFormatter 创建JSON输出格式化器
@@ -58,6 +59,10 @@ func (f *JSONOutputFormatter) FormatMatch(matches []*FingerprintMatch, response 
 		f.onOutput(response, uniqueMatches, tags)
 	}
 
+	if f.suppress {
+		return
+	}
+
 	// 构造结果对象
 	res := JSONResult{
 		URL:           response.URL,
@@ -90,6 +95,10 @@ func (f *JSONOutputFormatter) FormatNoMatch(response *HTTPResponse) {
 		f.onOutput(response, nil, nil)
 	}
 
+	if f.suppress {
+		return
+	}
+
 	res := JSONResult{
 		URL:           response.URL,
 		StatusCode:    response.StatusCode,
@@ -113,4 +122,9 @@ func (f *JSONOutputFormatter) ShouldOutput(urlStr string, fingerprintNames []str
 // SetOutputHook 设置输出回调（仅在实际输出时触发）
 func (f *JSONOutputFormatter) SetOutputHook(hook func(response *HTTPResponse, matches []*FingerprintMatch, tags []string)) {
 	f.onOutput = hook
+}
+
+// SetSuppressOutput 控制是否抑制JSON直接输出
+func (f *JSONOutputFormatter) SetSuppressOutput(suppress bool) {
+	f.suppress = suppress
 }

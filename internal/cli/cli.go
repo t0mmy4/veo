@@ -37,6 +37,13 @@ func Execute() {
 	// 处理指纹库更新逻辑 (前置处理，如果是更新操作则直接退出)
 	handleRuleUpdates(args)
 
+	if args.CheckSimilarOnly {
+		if err := runCheckSimilarOnlyMode(args); err != nil {
+			logger.Fatalf("相似度检查失败: %v", err)
+		}
+		return
+	}
+
 	//  提前显示启动信息，确保banner在所有日志输出之前显示
 	displayStartupInfo(args)
 

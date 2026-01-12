@@ -52,6 +52,9 @@ func (p *RequestProgress) Stop() {
 	close(p.stopChan)
 	<-p.doneChan
 	if p.useCleaner {
+		logger.WithOutputLock(func() {
+			p.clearLine()
+		})
 		logger.SetLineCleaner(nil)
 	}
 }
@@ -63,7 +66,6 @@ func (p *RequestProgress) run() {
 	for {
 		select {
 		case <-p.stopChan:
-			p.print(atomic.LoadInt64(&p.completed))
 			close(p.doneChan)
 			return
 		case <-ticker.C:

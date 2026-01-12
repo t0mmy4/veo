@@ -112,6 +112,17 @@ func (e *Engine) analyzeResponseInternal(response *HTTPResponse, httpClient http
 
 	// 更新匹配统计
 	if len(matches) > 0 {
+		for _, match := range matches {
+			if match == nil {
+				continue
+			}
+			if match.Matcher == "" {
+				match.Matcher = match.DSLMatched
+			}
+			if match.DSLMatched == "" {
+				match.DSLMatched = match.Matcher
+			}
+		}
 		atomic.AddInt64(&e.stats.MatchedRequests, 1)
 		e.mu.Lock()
 		e.stats.LastMatchTime = time.Now()

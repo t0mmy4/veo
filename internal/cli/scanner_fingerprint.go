@@ -87,7 +87,7 @@ func (sc *ScanController) runConcurrentFingerprintWithContext(parentCtx context.
 	logger.Debugf("指纹识别目标并发数设置为: %d", maxConcurrent)
 
 	var progressTracker *progress.RequestProgress
-	totalRequests := int64(len(targets) * 2)
+	totalRequests := int64(len(targets))
 	if sc.fingerprintEngine != nil && sc.args != nil && !sc.args.NoProbe {
 		activeTargets := len(sc.getUniqueProbeTargets(targets))
 		if activeTargets > 0 {
@@ -96,6 +96,9 @@ func (sc *ScanController) runConcurrentFingerprintWithContext(parentCtx context.
 				pathCount := sc.fingerprintEngine.GetPathRulesCount()
 				headerCount := sc.fingerprintEngine.GetHeaderRulesCount()
 				activeRequests = activeTargets * (pathCount + headerCount + 1)
+			}
+			if len(sc.fingerprintEngine.GetIconRules()) > 0 {
+				activeRequests += activeTargets
 			}
 			totalRequests += int64(activeRequests)
 		}
@@ -226,94 +229,44 @@ func (sc *ScanController) processSingleTargetFingerprint(ctx context.Context, ta
 	defer sc.requestProcessor.SetModuleContext(originalContext)
 
 	var results []interfaces.HTTPResponse
-	basePrinted := false
 
 	if sc.requestProcessor == nil || sc.fingerprintEngine == nil {
 		return results
 	}
 
-	// 1) 首次请求：不携带 Cookie，进行被动匹配并输出基础信息
-	respWithoutCookie, err := sc.requestProcessor.RequestOnceWithHeaders(ctx, target, map[string]string{"Cookie": ""})
+	resp, err := sc.requestProcessor.RequestOnceWithHeaders(ctx, target, nil)
 	if progressTracker != nil {
 		progressTracker.Increment()
 	}
-	if err == nil && respWithoutCookie != nil {
-		fpResponse := sc.convertToFingerprintResponse(respWithoutCookie)
-		if fpResponse == nil {
-			logger.Debugf("响应转换失败: %s", respWithoutCookie.URL)
-		} else {
-			matches := sc.fingerprintEngine.AnalyzeResponsePassive(fpResponse)
-			basePrinted = true
-			httpResp := interfaces.HTTPResponse{
-				URL:             respWithoutCookie.URL,
-				StatusCode:      respWithoutCookie.StatusCode,
-				ContentLength:   respWithoutCookie.ContentLength,
-				ContentType:     respWithoutCookie.ContentType,
-				ResponseHeaders: respWithoutCookie.ResponseHeaders,
-				RequestHeaders:  respWithoutCookie.RequestHeaders,
-				ResponseBody:    respWithoutCookie.ResponseBody,
-				Title:           respWithoutCookie.Title,
-				Server:          respWithoutCookie.Server,
-				Duration:        respWithoutCookie.Duration,
-				IsDirectory:     false,
-			}
-			if converted := convertFingerprintMatches(matches, true); len(converted) > 0 {
-				httpResp.Fingerprints = converted
-			}
-			results = append(results, httpResp)
-			logger.Debugf("%s 识别完成: %d", target, len(matches))
-		}
+	if err != nil || resp == nil {
+		return results
 	}
 
-	if ctx != nil {
-		select {
-		case <-ctx.Done():
-			return results
-		default:
-		}
+	fpResponse := sc.convertToFingerprintResponse(resp)
+	if fpResponse == nil {
+		logger.Debugf("响应转换失败: %s", resp.URL)
+		return results
 	}
 
-	// 2) 追加请求：携带 Cookie，仅输出匹配结果（无匹配则跳过）
-	respWithCookie, err := sc.requestProcessor.RequestOnceWithHeaders(ctx, target, nil)
-	if progressTracker != nil {
-		progressTracker.Increment()
+	matches := sc.fingerprintEngine.AnalyzeResponseWithClient(fpResponse, sc.requestProcessor)
+	httpResp := interfaces.HTTPResponse{
+		URL:             resp.URL,
+		StatusCode:      resp.StatusCode,
+		ContentLength:   resp.ContentLength,
+		ContentType:     resp.ContentType,
+		ResponseHeaders: resp.ResponseHeaders,
+		RequestHeaders:  resp.RequestHeaders,
+		ResponseBody:    resp.ResponseBody,
+		Title:           resp.Title,
+		Server:          resp.Server,
+		Duration:        resp.Duration,
+		IsDirectory:     false,
 	}
-	if err == nil && respWithCookie != nil {
-		fpResponse := sc.convertToFingerprintResponse(respWithCookie)
-		if fpResponse == nil {
-			logger.Debugf("响应转换失败: %s", respWithCookie.URL)
-			return results
-		}
-
-		appendBase := !basePrinted
-		var matches []*fingerprint.FingerprintMatch
-		if basePrinted {
-			matches = sc.fingerprintEngine.AnalyzeResponseWithClientNoNoMatch(fpResponse, sc.requestProcessor)
-		} else {
-			matches = sc.fingerprintEngine.AnalyzeResponseWithClient(fpResponse, sc.requestProcessor)
-			basePrinted = true
-		}
-		if len(matches) > 0 || appendBase {
-			httpResp := interfaces.HTTPResponse{
-				URL:             respWithCookie.URL,
-				StatusCode:      respWithCookie.StatusCode,
-				ContentLength:   respWithCookie.ContentLength,
-				ContentType:     respWithCookie.ContentType,
-				ResponseHeaders: respWithCookie.ResponseHeaders,
-				RequestHeaders:  respWithCookie.RequestHeaders,
-				ResponseBody:    respWithCookie.ResponseBody,
-				Title:           respWithCookie.Title,
-				Server:          respWithCookie.Server,
-				Duration:        respWithCookie.Duration,
-				IsDirectory:     false,
-			}
-			if len(matches) > 0 {
-				httpResp.Fingerprints = convertFingerprintMatches(matches, true)
-			}
-			results = append(results, httpResp)
-		}
-		logger.Debugf("%s 识别完成: %d", target, len(matches))
+	if len(matches) > 0 {
+		httpResp.Fingerprints = convertFingerprintMatches(matches, true)
 	}
+	results = append(results, httpResp)
+	logger.Debugf("%s 识别完成: %d", target, len(matches))
 
 	return results
 }
@@ -398,13 +351,13 @@ func (sc *ScanController) performActiveProbing(ctx context.Context, targets []st
 	// 检查Context是否取消
 	select {
 	case <-ctx.Done():
-		logger.Warn("扫描已取消，跳过主动探测阶段")
 		return nil
 	default:
 	}
 
 	// 检查是否有任何需要主动探测的规则
 	hasPathRules := sc.fingerprintEngine.HasPathRules()
+	hasIconRules := len(sc.fingerprintEngine.GetIconRules()) > 0
 
 	var allResults []interfaces.HTTPResponse
 
@@ -470,22 +423,24 @@ func (sc *ScanController) performActiveProbing(ctx context.Context, targets []st
 						}
 					}
 
-					// Icon 探测已由被动阶段完成，这里不重复发起
-					/*
-						iconResults, err := sc.fingerprintEngine.ExecuteIconProbing(probeCtx, baseURL, sc.httpClient)
-						if err != nil {
-							logger.Debugf("Icon probing error: %v", err)
+					// Icon Probing
+					if hasIconRules {
+						iconBaseURL := sc.extractBaseURL(baseURL)
+						if iconBaseURL == "" {
+							iconBaseURL = baseURL
 						}
-						if iconResults != nil && len(iconResults.Matches) > 0 {
+						if resIcon, err := sc.fingerprintEngine.ExecuteIconProbing(probeCtx, iconBaseURL, probeClient); err != nil {
+							logger.Debugf("Icon probing error: %v", err)
+						} else if resIcon != nil {
 							if formatter != nil {
-								sc.printFingerprintResultWithProgressClear(iconResults.Matches, iconResults.Response, formatter, "Icon探测")
+								sc.printFingerprintResultWithProgressClear(resIcon.Matches, resIcon.Response, formatter, "icon探测")
 							}
-							httpResp := sc.convertProbeResult(iconResults)
+							httpResp := sc.convertProbeResult(resIcon)
 							localResults = append(localResults, httpResp)
 						}
-					*/
+					}
 
-					// 3. 404 Page Probing
+					// 404 Page Probing
 					if res404 := sc.perform404PageProbing(probeCtx, baseURL, formatter, probeClient); res404 != nil {
 						localResults = append(localResults, *res404)
 					}
