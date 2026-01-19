@@ -19,19 +19,15 @@ type ConnectivityChecker struct {
 
 // NewConnectivityChecker 创建连通性检测器
 func NewConnectivityChecker(cfg *config.Config) *ConnectivityChecker {
-	// 构造HTTP客户端配置
 	httpCfg := httpclient.DefaultConfig()
 
-	// 从全局配置覆盖超时时间
 	if cfg != nil && cfg.Addon.Request.Timeout > 0 {
 		httpCfg.Timeout = time.Duration(cfg.Addon.Request.Timeout) * time.Second
 	} else {
-		httpCfg.Timeout = 5 * time.Second // 默认5秒，快速失败
+		httpCfg.Timeout = 5 * time.Second
 	}
 
-	// 禁用重定向以加快检测速度
 	httpCfg.FollowRedirect = false
-	// 即使证书无效也认为是存活的
 	httpCfg.SkipTLSVerify = true
 
 	return &ConnectivityChecker{
@@ -48,7 +44,6 @@ func (cc *ConnectivityChecker) BatchCheck(targets []string) []string {
 
 	logger.Debugf("开始目标连通性检测，目标数量: %d", len(targets))
 
-	// 标准化所有目标
 	parser := NewTargetParser()
 	var candidates []string
 	for _, t := range targets {
@@ -60,7 +55,6 @@ func (cc *ConnectivityChecker) BatchCheck(targets []string) []string {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	// 限制并发数
 	concurrency := 20
 	if cc.config != nil && cc.config.Module.Dirscan {
 		concurrency = 50
@@ -96,22 +90,24 @@ func (cc *ConnectivityChecker) BatchCheck(targets []string) []string {
 	}
 
 	wg.Wait()
-	fmt.Println() // Newline after progress
+	fmt.Println()
 
 	logger.Debugf("有效目标: %d/%d", len(validTargets), len(candidates))
+	if len(validTargets) > 0 {
+		logger.Debug("存活目标列表:")
+		for _, target := range validTargets {
+			logger.Debugf("  %s", target)
+		}
+	}
 	return validTargets
 }
 
-// isReachable 检测单个URL是否可连通
 func (cc *ConnectivityChecker) isReachable(urlStr string) bool {
-	// 尝试发送请求
-	// 注意：httpclient.MakeRequest 默认是 GET。对于存活检测，GET 是最可靠的。
 	_, statusCode, err := cc.client.MakeRequest(urlStr)
 	if err != nil {
 		logger.Debugf("目标不可连通: %s (%v)", urlStr, err)
 		return false
 	}
-	// 只要有响应（无论状态码如何，只要不是网络错误），都认为存活
 	logger.Debugf("目标可连通: %s [%d]", urlStr, statusCode)
 	return true
 }
@@ -124,16 +120,13 @@ func (cc *ConnectivityChecker) ValidateAndNormalize(targets []string) ([]string,
 	parser := NewTargetParser()
 
 	for _, target := range targets {
-		// 验证URL格式
 		if err := parser.ValidateURL(target); err != nil {
 			logger.Warnf("跳过无效目标 %s: %v", target, err)
 			continue
 		}
 
-		// 标准化URL
 		urls := parser.NormalizeURL(target)
 		if len(urls) > 0 {
-			// 如果不进行网络检测，只取第一个标准化的URL
 			validTargets = append(validTargets, urls[0])
 		}
 	}

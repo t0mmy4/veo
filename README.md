@@ -216,7 +216,7 @@
 | `-nc`, `--no-color` | `false` | 禁用彩色输出，适用于不支持 ANSI 的终端。 | `--no-color` |
 | `--json` | `false` | 控制台结果以 JSON 输出。 | `--json` |
 | `-nc` | `false` | 启用存活性检测 (默认关闭)。 | `-nc` |
-| `-ua` | `true` | 是否启用随机User-Agent池，可通过 `-ua=false` 关闭。 | `-ua=false` |
+| `-ua` | `false` | 是否启用随机User-Agent池，可通过 `-ua=true` 开启。 | `-ua=true` |
 
 ### 性能调优
 

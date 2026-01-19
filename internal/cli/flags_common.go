@@ -52,7 +52,7 @@ type CLIArgs struct {
 
 	DisableHashFilter bool // 禁用哈希过滤 (--no-filter)
 
-	RandomUA bool // 是否启用随机User-Agent (-ua, 默认启用)
+	RandomUA bool // 是否启用随机User-Agent (-ua, 默认关闭)
 
 	Depth int // 递归目录扫描层级 (--depth)
 	// DepthSet 仅当用户通过CLI传入 --depth 时为 true
@@ -97,7 +97,7 @@ func ParseCLIArgs() *CLIArgs {
 
 		noFilter = flag.Bool("no-filter", false, "完全禁用目录扫描哈希过滤（默认开启）")
 
-		randomUAFlag = flag.Bool("ua", true, "是否启用随机User-Agent池 (默认: true，可通过 -ua=false 关闭)")
+		randomUAFlag = flag.Bool("ua", false, "是否启用随机User-Agent池 (默认: false，可通过 -ua=true 开启)")
 		depth        = flag.Int("depth", 0, "递归目录扫描深度 (0 表示关闭递归，默认: 0)")
 		updateRules  = flag.Bool("update-rules", false, "从云端更新指纹识别规则库")
 
@@ -228,7 +228,7 @@ veo - 指纹识别/目录扫描
   --shiro            在指纹识别/目录扫描请求头中添加 Cookie: rememberMe=1 (默认关闭)
   --no-color         禁用彩色输出
   --json             控制台输出 JSON
-  -ua bool           是否启用随机User-Agent 池 (默认 true，使用 -ua=false 关闭)
+  -ua bool           是否启用随机User-Agent 池 (默认 false，使用 -ua=true 开启)
 
 性能调优:
   -t, --threads int  全局并发线程数（默认 100）

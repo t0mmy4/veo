@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -13,6 +15,7 @@ import (
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
 	"veo/pkg/utils/processor"
+	"veo/pkg/utils/redirect"
 )
 
 type similarProbe struct {
@@ -54,9 +57,17 @@ func (sc *ScanController) checkSimilarTargetsWithReport(ctx context.Context, tar
 
 	logSimilarInfo(sc, "开始相似目标检查: %d", len(targets))
 
-	reqProcessor := sc.requestProcessor.CloneWithContext("check-similar", 0)
+	reqProcessor := sc.requestProcessor.CloneWithContext("fingerprint-similar", 0)
 	reqProcessor.SetStatsUpdater(nil)
 	reqProcessor.SetBatchMode(true)
+	if cfg := reqProcessor.GetConfig(); cfg != nil {
+		if cfg.FollowRedirect || cfg.MaxRedirects != 0 {
+			updated := *cfg
+			updated.FollowRedirect = false
+			updated.MaxRedirects = 0
+			reqProcessor.UpdateConfig(&updated)
+		}
+	}
 
 	iconCache := fingerprint.NewIconCache()
 
@@ -104,7 +115,7 @@ func (sc *ScanController) checkSimilarTargetsWithReport(ctx context.Context, tar
 			}
 
 			res.ok = true
-			res.remoteIP = strings.TrimSpace(resp.RemoteIP)
+			res.remoteIP = buildRemoteEndpoint(resp)
 			res.status = resp.StatusCode
 			res.isHTTPS = isHTTPSURL(targets[idx])
 			logSimilarSignatureDebug(res.target, res.remoteIP, res.signature, signatureInfo)
@@ -225,6 +236,7 @@ type signatureInfo struct {
 	Title       string
 	ContentType string
 	IconHash    string
+	Location    string
 }
 
 func buildSignatureInfo(resp *interfaces.HTTPResponse, iconHash string) (string, signatureInfo) {
@@ -238,9 +250,13 @@ func buildSignatureInfo(resp *interfaces.HTTPResponse, iconHash string) (string,
 		Title:       normalizeTitle(resp.Title),
 		ContentType: normalizeContentType(resp.ContentType),
 		IconHash:    normalizeIconHash(iconHash),
+		Location:    normalizeLocation(resp.URL, resp.StatusCode, resp.ResponseHeaders),
 	}
 
 	signature := fmt.Sprintf("%s|%s|%s|%s|%s", info.StatusLine, info.Server, info.Title, info.ContentType, info.IconHash)
+	if info.Location != "" {
+		signature = signature + "|" + info.Location
+	}
 	return signature, info
 }
 
@@ -264,11 +280,7 @@ func normalizeStatusLine(statusCode int) string {
 	if statusCode <= 0 {
 		return "unknown"
 	}
-	text := http.StatusText(statusCode)
-	if text == "" {
-		return fmt.Sprintf("%d", statusCode)
-	}
-	return fmt.Sprintf("%d %s", statusCode, text)
+	return strconv.Itoa(statusCode)
 }
 
 func normalizeContentType(contentType string) string {
@@ -290,12 +302,63 @@ func normalizeIconHash(hash string) string {
 	return hash
 }
 
+func normalizeLocation(rawURL string, statusCode int, headers map[string][]string) string {
+	if statusCode != http.StatusMovedPermanently && statusCode != http.StatusFound {
+		return ""
+	}
+	location := strings.TrimSpace(redirect.GetHeaderFirst(headers, "Location"))
+	if location == "" {
+		return ""
+	}
+	if resolved := redirect.ResolveRedirectURL(rawURL, location); resolved != "" {
+		return resolved
+	}
+	return location
+}
+
+func buildRemoteEndpoint(resp *interfaces.HTTPResponse) string {
+	if resp == nil {
+		return ""
+	}
+	ip := strings.TrimSpace(resp.RemoteIP)
+	if ip == "" {
+		return ""
+	}
+	port := extractPortFromURL(resp.URL)
+	if port == "" {
+		return ip
+	}
+	return net.JoinHostPort(ip, port)
+}
+
+func extractPortFromURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" {
+		return ""
+	}
+	if port := strings.TrimSpace(parsed.Port()); port != "" {
+		return port
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
+}
+
 func logSimilarSignatureDebug(target, remoteIP, signature string, info signatureInfo) {
 	ip := strings.TrimSpace(remoteIP)
 	if ip == "" {
 		ip = "unknown"
 	}
-	logger.Debugf("相似度要素: %s | IP=%s | 状态=%s | Server=%s | Title=%s | Content-Type=%s | IconMD5=%s | 签名=%s",
+	location := info.Location
+	if location == "" {
+		location = "none"
+	}
+	logger.Debugf("相似度要素: %s | IP=%s | 状态=%s | Server=%s | Title=%s | Content-Type=%s | IconMD5=%s | Location=%s | 签名=%s",
 		target,
 		ip,
 		info.StatusLine,
@@ -303,6 +366,7 @@ func logSimilarSignatureDebug(target, remoteIP, signature string, info signature
 		info.Title,
 		info.ContentType,
 		info.IconHash,
+		location,
 		signature,
 	)
 }

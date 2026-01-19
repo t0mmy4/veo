@@ -8,19 +8,18 @@ import (
 
 // RequestConfig 请求配置
 type RequestConfig struct {
-	Timeout         time.Duration // 请求超时时间
-	MaxRetries      int           // 最大重试次数
-	UserAgents      []string      // User-Agent列表（支持随机选择）
-	MaxBodySize     int           // 最大响应体大小
-	FollowRedirect  bool          // 是否跟随重定向
-	MaxRedirects    int           // 最大重定向次数
-	MaxConcurrent   int           // 最大并发数
-	ConnectTimeout  time.Duration // 连接超时时间
-	KeepAlive       time.Duration // 保持连接时间
-	RandomUserAgent bool          // 是否随机使用UserAgent
-	Delay           time.Duration // 请求延迟时间
-	ProxyURL        string        // 上游代理URL
-	// DecompressResponse 控制是否解压/解码响应体
+	Timeout            time.Duration
+	MaxRetries         int
+	UserAgents         []string
+	MaxBodySize        int
+	FollowRedirect     bool
+	MaxRedirects       int
+	MaxConcurrent      int
+	ConnectTimeout     time.Duration
+	KeepAlive          time.Duration
+	RandomUserAgent    bool
+	Delay              time.Duration
+	ProxyURL           string
 	DecompressResponse bool
 }
 
@@ -35,10 +34,6 @@ func ApplyRedirectPolicy(config *RequestConfig) {
 	config.MaxRedirects = DefaultMaxRedirects
 }
 
-// ============================================================================
-// 配置相关功能
-// ============================================================================
-
 // GetDefaultConfig 暴露默认配置获取方法（测试用）
 func GetDefaultConfig() *RequestConfig {
 	return getDefaultConfig()
@@ -46,18 +41,15 @@ func GetDefaultConfig() *RequestConfig {
 
 // getDefaultConfig 获取默认配置
 func getDefaultConfig() *RequestConfig {
-	timeout := 10 * time.Second // 默认超时时间
-
-	retries := 3 // 默认重试次数
-
-	maxConcurrent := 100 // 默认并发数
-
-	connectTimeout := 5 * time.Second // 默认连接超时时间
+	timeout := 10 * time.Second
+	retries := 3
+	maxConcurrent := 100
+	connectTimeout := 5 * time.Second
 	maxRedirects := DefaultMaxRedirects
 
-	randomUserAgent := true
+	randomUserAgent := false
 
-	delay := time.Duration(0) // 移除延迟配置，统一为0
+	delay := time.Duration(0)
 
 	userAgents := useragent.GetEffectiveList()
 	if len(userAgents) == 0 {
@@ -68,8 +60,8 @@ func getDefaultConfig() *RequestConfig {
 		Timeout:            timeout,
 		MaxRetries:         retries,
 		UserAgents:         userAgents,
-		MaxBodySize:        10 * 1024 * 1024, // 10MB
-		FollowRedirect:     false,            // 默认不跟随重定向
+		MaxBodySize:        10 * 1024 * 1024,
+		FollowRedirect:     false,
 		MaxRedirects:       maxRedirects,
 		MaxConcurrent:      maxConcurrent,
 		ConnectTimeout:     connectTimeout,
@@ -79,7 +71,6 @@ func getDefaultConfig() *RequestConfig {
 	}
 }
 
-// initializeUserAgentPool 初始化UserAgent池
 func initializeUserAgentPool(config *RequestConfig) []string {
 	effective := useragent.GetEffectiveList()
 	if len(effective) == 0 {

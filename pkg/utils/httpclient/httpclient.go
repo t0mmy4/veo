@@ -19,8 +19,6 @@ import (
 	"golang.org/x/net/html/charset"
 )
 
-// 接口定义
-
 // HTTPClientInterface HTTP客户端接口（通用HTTP客户端抽象）
 type HTTPClientInterface interface {
 	// MakeRequest 发起HTTP请求
@@ -36,18 +34,18 @@ type HeaderAwareClient interface {
 
 // Config HTTP客户端配置结构
 type Config struct {
-	Timeout            time.Duration     // 请求超时时间
-	FollowRedirect     bool              // 是否跟随重定向
-	MaxRedirects       int               // 最大重定向次数
-	UserAgent          string            // User-Agent
-	SkipTLSVerify      bool              // 跳过TLS证书验证
-	TLSTimeout         time.Duration     // TLS握手超时
-	ProxyURL           string            // 上游代理URL
-	CustomHeaders      map[string]string // 自定义HTTP头部
-	SameHostOnly       bool              // 重定向仅限同主机
-	MaxBodySize        int               // 最大响应体大小(字节)
-	MaxConcurrent      int               // 最大并发连接数
-	DecompressResponse bool              // 是否解压/解码响应体
+	Timeout            time.Duration
+	FollowRedirect     bool
+	MaxRedirects       int
+	UserAgent          string
+	SkipTLSVerify      bool
+	TLSTimeout         time.Duration
+	ProxyURL           string
+	CustomHeaders      map[string]string
+	SameHostOnly       bool
+	MaxBodySize        int
+	MaxConcurrent      int
+	DecompressResponse bool
 }
 
 // RemoteIPHeaderKey 内部传递远端IP，不参与规则匹配
@@ -55,35 +53,33 @@ const RemoteIPHeaderKey = "X-VEO-Remote-IP"
 
 // DefaultConfig 获取默认HTTP客户端配置（安全扫描优化版）
 func DefaultConfig() *Config {
-	ua := useragent.Pick()
+	ua := useragent.Primary()
 	if ua == "" {
-		ua = "veo-HTTPClient/1.0"
+		ua = "CNVD TEST"
 	}
 
 	return &Config{
 		Timeout:            10 * time.Second,
-		FollowRedirect:     true, // 默认跟随重定向
-		MaxRedirects:       5,    // 最大5次重定向
+		FollowRedirect:     true,
+		MaxRedirects:       5,
 		UserAgent:          ua,
-		SkipTLSVerify:      true,             // 网络安全扫描工具常用设置
-		TLSTimeout:         5 * time.Second,  // TLS握手超时
-		MaxBodySize:        10 * 1024 * 1024, // 10MB
+		SkipTLSVerify:      true,
+		TLSTimeout:         5 * time.Second,
+		MaxBodySize:        10 * 1024 * 1024,
 		MaxConcurrent:      1000,
 		DecompressResponse: true,
 	}
 }
 
-// 通用HTTP客户端实现（基于 fasthttp）
-
 // Client 通用HTTP客户端实现
 type Client struct {
 	client             *fasthttp.Client
-	timeout            time.Duration     // 单次请求超时
-	followRedirect     bool              // 是否跟随重定向
-	maxRedirects       int               // 最大重定向次数
-	userAgent          string            // User-Agent
-	customHeaders      map[string]string // 自定义HTTP头部
-	sameHostOnly       bool              // 重定向仅限同主机
+	timeout            time.Duration
+	followRedirect     bool
+	maxRedirects       int
+	userAgent          string
+	customHeaders      map[string]string
+	sameHostOnly       bool
 	decompressResponse bool
 }
 
@@ -93,7 +89,6 @@ func New(config *Config) *Client {
 		config = DefaultConfig()
 	}
 
-	// 创建 fasthttp 客户端
 	waitTimeout := config.Timeout
 	if waitTimeout <= 0 {
 		waitTimeout = 3 * time.Second
@@ -106,7 +101,7 @@ func New(config *Config) *Client {
 		MaxConnWaitTimeout:  waitTimeout,
 		MaxIdleConnDuration: 30 * time.Second,
 		MaxResponseBodySize: config.MaxBodySize,
-		ReadBufferSize:      16384, // 16KB
+		ReadBufferSize:      16384,
 		TLSConfig: &tls.Config{
 			InsecureSkipVerify: config.SkipTLSVerify,
 			Renegotiation:      tls.RenegotiateOnceAsClient,
@@ -114,10 +109,9 @@ func New(config *Config) *Client {
 		},
 		DisablePathNormalizing:        true,
 		DisableHeaderNamesNormalizing: true,
-		NoDefaultUserAgentHeader:      true, // 我们自己控制 UA
+		NoDefaultUserAgentHeader:      true,
 	}
 
-	// 配置代理 Dial
 	if config.ProxyURL != "" {
 		dialFunc := FasthttpDialerFactory(config.ProxyURL, 5*time.Second)
 		if dialFunc != nil {
@@ -155,7 +149,6 @@ type httpClientFetcher struct {
 }
 
 func (f *httpClientFetcher) MakeRequestFull(rawURL string) (string, int, map[string][]string, error) {
-	// 调用底层单次请求
 	return f.client.doRequestInternal(rawURL, f.customHeaders)
 }
 
@@ -188,20 +181,17 @@ func (c *Client) executeRequestFull(rawURL string, customHeaders map[string]stri
 	if !c.followRedirect {
 		return c.doRequestInternal(rawURL, customHeaders)
 	}
-	// 构造重定向配置
 	redirectConfig := &redirect.Config{
 		MaxRedirects:   c.maxRedirects,
 		FollowRedirect: c.followRedirect,
 		SameHostOnly:   c.sameHostOnly,
 	}
 
-	// 构造Fetcher适配器
 	fetcher := &httpClientFetcher{
 		client:        c,
 		customHeaders: customHeaders,
 	}
 
-	// 执行请求（包含重定向处理）
 	resp, err := redirect.Execute(rawURL, fetcher, redirectConfig)
 	if err != nil {
 		return "", 0, nil, err
@@ -217,30 +207,24 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 		return "", 0, nil, fmt.Errorf("empty url")
 	}
 
-	// Acquire objects
 	req := fasthttp.AcquireRequest()
 	resp := fasthttp.AcquireResponse()
 	defer fasthttp.ReleaseRequest(req)
 	defer fasthttp.ReleaseResponse(resp)
 
-	// Prepare Request
 	req.SetRequestURI(requestURL)
 	req.Header.SetMethod(fasthttp.MethodGet)
 
-	// Default Headers
 	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 	req.Header.Set("Cache-Control", "no-cache")
 
-	// Apply Global Custom Headers
 	if len(c.customHeaders) > 0 {
 		for k, v := range c.customHeaders {
 			req.Header.Set(k, v)
 		}
 	}
 
-	// Apply Per-Request Custom Headers
 	if len(customHeaders) > 0 {
 		for k, v := range customHeaders {
 			trimmedKey := strings.TrimSpace(k)
@@ -250,17 +234,14 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 		}
 	}
 
-	// Execute
 	if err := c.client.DoTimeout(req, resp, c.timeout); err != nil {
 		return "", 0, nil, c.handleRequestError(err)
 	}
 
 	remoteIP := remoteIPFromAddr(resp.RemoteAddr())
 
-	// Extract Info
 	statusCode = resp.StatusCode()
 
-	// Headers Map
 	headers = make(map[string][]string)
 	resp.Header.VisitAll(func(key, value []byte) {
 		k := string(key)
@@ -271,7 +252,6 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 		headers[RemoteIPHeaderKey] = []string{remoteIP}
 	}
 
-	// Body Decompression (if needed) & Charset Decoding
 	contentEncoding := string(resp.Header.Peek("Content-Encoding"))
 	var respBody []byte
 	respBody = resp.Body()
@@ -286,7 +266,6 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 		}
 	}
 
-	// Convert to string (Copy happens here, safe to release Response after)
 	body = string(respBody)
 
 	logger.Debugf("Fasthttp请求完成: %s [%d] Size: %d", rawURL, statusCode, len(body))
