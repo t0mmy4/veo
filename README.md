@@ -1,14 +1,9 @@
-# VEO 主被动扫描工具
-## 只做二件事
-
-**目录探测、指纹识别**
+> 做经得起打磨，经得起时间考验的好工具，代码不缝合，纯0到1实现，每个功能和细节经过反复锤炼和多场景测试，不做流水线工具，不淹没在历史的洪流中。
 
 **欢迎使用任何同类型工具进行准确性和误报对比**。
 
 作者VX：chainreactor
 
----
-[![asciicast](https://asciinema.org/a/nNomQmVMS7vfU6TKbPtCI7Nd0.svg)](https://asciinema.org/a/nNomQmVMS7vfU6TKbPtCI7Nd0)
 
 ## 更新日志
 
